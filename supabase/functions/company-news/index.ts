@@ -122,33 +122,39 @@ serve(async (req) => {
     if (!company) return jsonResponse(404, { error: "Company not found" });
 
     // ── 3. Build search queries ───────────────────────────────────────────────
-    // Search by company name — strip legal suffixes for better results
+    // Strip legal suffixes for cleaner queries
     const cleanName = company.name
       .replace(/\b(A\/S|ApS|I\/S|K\/S|P\/S|IVS|SE|SMBA)\b/gi, "")
       .trim();
 
-    const queries = [
-      cleanName,
-      `"${cleanName}"`, // exact match
+    // NewsAPI free tier only supports ~28 days lookback
+    const fromDate = new Date(Date.now() - 28 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+
+    // We do NOT lock to language=da — NewsAPI indexes very few Danish-language sources.
+    // Instead we anchor each query with "Denmark" or "Danmark" to stay geographically
+    // relevant while picking up both English and Danish coverage.
+    const queries: { q: string; pageSize: number }[] = [
+      { q: `"${cleanName}" Denmark`,  pageSize: 10 }, // exact name + English country
+      { q: `"${cleanName}" Danmark`,  pageSize: 10 }, // exact name + Danish country
+      { q: `${cleanName} Denmark`,    pageSize: 5  }, // broader fallback
     ];
 
     const allArticles: any[] = [];
     const seenUrls = new Set<string>();
 
-    for (const q of queries) {
+    for (const { q, pageSize } of queries) {
       const url = new URL("https://newsapi.org/v2/everything");
       url.searchParams.set("q", q);
-      url.searchParams.set("language", "da"); // Danish first
       url.searchParams.set("sortBy", "publishedAt");
-      url.searchParams.set("pageSize", "10");
-      url.searchParams.set("from", new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split("T")[0]); // last 90 days
+      url.searchParams.set("pageSize", String(pageSize));
+      url.searchParams.set("from", fromDate);
 
       const res = await fetch(url.toString(), {
         headers: { "X-Api-Key": newsApiKey },
       });
 
       if (!res.ok) {
-        console.warn(`NewsAPI error for query "${q}":`, res.status);
+        console.warn(`NewsAPI error for query "${q}":`, res.status, await res.text());
         continue;
       }
 
@@ -157,30 +163,6 @@ serve(async (req) => {
         if (!seenUrls.has(article.url)) {
           seenUrls.add(article.url);
           allArticles.push(article);
-        }
-      }
-    }
-
-    // Also search in English for international coverage
-    if (cleanName.length > 3) {
-      const url = new URL("https://newsapi.org/v2/everything");
-      url.searchParams.set("q", cleanName);
-      url.searchParams.set("language", "en");
-      url.searchParams.set("sortBy", "publishedAt");
-      url.searchParams.set("pageSize", "5");
-      url.searchParams.set("from", new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split("T")[0]);
-
-      const res = await fetch(url.toString(), {
-        headers: { "X-Api-Key": newsApiKey },
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        for (const article of data.articles ?? []) {
-          if (!seenUrls.has(article.url)) {
-            seenUrls.add(article.url);
-            allArticles.push(article);
-          }
         }
       }
     }
