@@ -241,9 +241,18 @@ async function fetchFinancials(cvr: string, auth: string): Promise<FinancialData
   } catch (err) { console.warn("Financials error:", err); return null; }
 }
 
+// ─── News sentiment type ──────────────────────────────────────────────────────
+
+type NewsArticleRow = {
+  sentiment_score: number | null;
+  score_impact: number | null;
+  sentiment_label: string | null;
+  published_at: string;
+};
+
 // ─── Score ────────────────────────────────────────────────────────────────────
 
-function calculateScore(company: CompanyRow, events: CompanyEventRow[], virk: VirkData, fin: FinancialData) {
+function calculateScore(company: CompanyRow, events: CompanyEventRow[], virk: VirkData, fin: FinancialData, news: NewsArticleRow[] = []) {
   const now = new Date().toISOString();
   const factors: SignalFactor[] = [];
   const eventCounts = buildEventCounts(events);
@@ -364,6 +373,37 @@ function calculateScore(company: CompanyRow, events: CompanyEventRow[], virk: Vi
     score += 12; factors.push({ code: "MULTI_SIGNAL_PATTERN", label: "3+ signal types in 90 days", points: 12, event_count: new Set(last90.map((e) => e.event_type)).size, last_seen_at: latestAt(last90) });
   }
 
+  // ── News sentiment ───────────────────────────────────────────────────────────
+  if (news.length > 0) {
+    const totalNewsImpact = news.reduce((sum, a) => sum + (a.score_impact ?? 0), 0);
+    const clampedNewsImpact = Math.max(-10, Math.min(25, totalNewsImpact));
+
+    if (clampedNewsImpact !== 0) {
+      score += clampedNewsImpact;
+      const negCount = news.filter((a) => (a.sentiment_score ?? 0) < -0.1).length;
+      const posCount = news.filter((a) => (a.sentiment_score ?? 0) > 0.1).length;
+      const latestArticle = [...news].sort((a, b) => new Date(b.published_at).getTime() - new Date(a.published_at).getTime())[0];
+
+      if (clampedNewsImpact > 0 && negCount > 0) {
+        factors.push({
+          code: "NEWS_SENTIMENT",
+          label: `Negative news coverage (${negCount} article${negCount > 1 ? "s" : ""})`,
+          points: clampedNewsImpact,
+          event_count: negCount,
+          last_seen_at: latestArticle?.published_at ?? now,
+        });
+      } else if (clampedNewsImpact < 0 && posCount > 0) {
+        factors.push({
+          code: "NEWS_SENTIMENT_POSITIVE",
+          label: `Positive news coverage (${posCount} article${posCount > 1 ? "s" : ""})`,
+          points: clampedNewsImpact,
+          event_count: posCount,
+          last_seen_at: latestArticle?.published_at ?? now,
+        });
+      }
+    }
+  }
+
   score = Math.max(0, Math.min(100, score));
   factors.sort((a, b) => b.points - a.points);
 
@@ -380,7 +420,7 @@ function calculateScore(company: CompanyRow, events: CompanyEventRow[], virk: Vi
       analyzed_events: events.length,
       analyzed_window_days: ANALYSIS_WINDOW_DAYS,
       calculated_at: now,
-      data_sources: { events: true, virk: !!virk, financials: !!fin, financial_years: fin?.years.length ?? 0 },
+      data_sources: { events: true, virk: !!virk, financials: !!fin, financial_years: fin?.years.length ?? 0, news: news.length },
     },
   };
 }
@@ -419,11 +459,20 @@ serve(async (req) => {
 
     const auth = virkUser && virkPass ? "Basic " + btoa(`${virkUser}:${virkPass}`) : null;
 
-    // Fetch Virk + financials in parallel — both gracefully return null if unavailable
-    const [virkData, finData] = await Promise.all([
+    // Fetch Virk, financials, and cached news in parallel
+    const [virkData, finData, newsResult] = await Promise.all([
       auth ? fetchVirkData(company.cvr_number, auth) : Promise.resolve(null),
       auth ? fetchFinancials(company.cvr_number, auth) : Promise.resolve(null),
+      supabase
+        .from("company_news")
+        .select("sentiment_score, score_impact, sentiment_label, published_at")
+        .eq("company_id", company.id)
+        .gt("expires_at", new Date().toISOString())
+        .order("published_at", { ascending: false })
+        .limit(15),
     ]);
+
+    const newsArticles: NewsArticleRow[] = newsResult.data ?? [];
 
     // Update company record with fresh data
     if (virkData) {
@@ -435,7 +484,7 @@ serve(async (req) => {
       await supabase.from("companies").update(update).eq("id", company.id);
     }
 
-    const result = calculateScore(company as CompanyRow, (eventsData ?? []) as CompanyEventRow[], virkData, finData);
+    const result = calculateScore(company as CompanyRow, (eventsData ?? []) as CompanyEventRow[], virkData, finData, newsArticles);
 
     const { error: upsertError } = await supabase
       .from("company_risk_scores")
