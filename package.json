@@ -1,0 +1,12 @@
+{
+  "devDependencies": {
+    "@types/react": "~19.2.10",
+    "supabase": "^2.81.3",
+    "typescript": "~5.9.2"
+  },
+  "dependencies": {
+    "expo": "^55.0.8",
+    "react-dom": "19.2.0",
+    "react-native-web": "^0.21.0"
+  }
+}
