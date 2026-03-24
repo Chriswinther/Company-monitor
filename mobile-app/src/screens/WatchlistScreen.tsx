@@ -157,16 +157,6 @@ export default function WatchlistScreen({ navigation }: any) {
   }, [navigation]);
 
   const handleRemove = useCallback(async (item: EnrichedWatchlistItem) => {
-    const confirmed =
-      typeof window !== 'undefined' && typeof window.confirm === 'function'
-        ? window.confirm(`Remove ${item.company.name} from watchlist?`)
-        : await new Promise<boolean>((resolve) =>
-            Alert.alert('Remove', `Remove ${item.company.name}?`, [
-              { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
-              { text: 'Remove', style: 'destructive', onPress: () => resolve(true) },
-            ])
-          );
-    if (!confirmed) return;
     try {
       setRemovingId(item.watchlistItem.id);
       await removeFromWatchlist(item.company.cvr_number);
