@@ -47,6 +47,27 @@ const POSITIVE_KEYWORDS = [
   "acquisition", "merger", "partnership", "contract", "deal", "award",
 ];
 
+// Growth-signal keywords: indicate rapid scaling that may force a leadership change.
+// These don't affect sentiment score but are stored so the signal-score engine
+// can detect growth pressure alongside financial data.
+const GROWTH_SIGNAL_KEYWORDS = [
+  // Funding (Danish)
+  "investering", "kapitalrejsning", "vækstkapital", "runde", "seed", "series",
+  "venturekapital", "kapitalfond", "egenkapital", "investorer",
+  // Funding (English)
+  "funding round", "series a", "series b", "series c", "seed round",
+  "venture capital", "raised", "investment round", "backed by", "valuation",
+  // Expansion
+  "ekspanderer", "ny marked", "international", "åbner", "lancerer",
+  "expands", "new market", "launches", "opens office", "enters",
+  // Rapid hiring
+  "ansætter", "rekruttering", "medarbejdere søges",
+  "hiring", "recruitment drive", "headcount", "growing team",
+  // Milestones
+  "fordoblet", "tredoblet", "100 ansatte", "1000 kunder", "rekordår",
+  "doubled", "tripled", "milestone", "record year", "fastest growing",
+];
+
 function scoreSentiment(title: string, description: string): number {
   const text = `${title} ${description}`.toLowerCase();
   let score = 0;
@@ -289,6 +310,10 @@ serve(async (req) => {
       .map((a) => {
         const sentiment = scoreSentiment(a.title ?? "", a.description ?? "");
         const relevance = a.title?.toLowerCase().includes(cleanName.toLowerCase()) ? 1.0 : 0.6;
+        // Detect growth signals: rapid scaling, funding rounds, expansion — separate from
+        // negative/positive sentiment. Used by company-signal-score for growth-pressure scoring.
+        const articleText = `${a.title ?? ""} ${a.description ?? ""}`.toLowerCase();
+        const isGrowthSignal = GROWTH_SIGNAL_KEYWORDS.some((kw) => articleText.includes(kw));
         return {
           company_id: company.id,
           cvr_number: company.cvr_number,
@@ -300,6 +325,7 @@ serve(async (req) => {
           sentiment_score: sentiment,
           sentiment_label: sentimentLabel(sentiment),
           score_impact: scoreImpact(sentiment, relevance),
+          growth_signal: isGrowthSignal,
           fetched_at: now,
           expires_at,
         };

@@ -4,7 +4,7 @@ import { createClient } from "npm:@supabase/supabase-js";
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type RiskLevel = "low" | "moderate" | "high" | "critical";
-type OpportunityType = "stable" | "transition" | "growth" | "turnaround";
+type OpportunityType = "stable" | "transition" | "growth" | "rapid_growth" | "turnaround";
 
 type CompanyRow = { id: string; cvr_number: string; name?: string | null; status?: string | null };
 type CompanyEventRow = { id?: string; company_id: string; event_type: string; detected_at: string; old_value?: Record<string, unknown> | null; new_value?: Record<string, unknown> | null };
@@ -122,8 +122,10 @@ function toRiskLevel(score: number): RiskLevel {
   return "low";
 }
 
-function toOpportunity(args: { leadership: number; drop25: number; empGrowth: number; statusChange: boolean; finDistress: boolean; finGrowth: boolean }): OpportunityType {
+function toOpportunity(args: { leadership: number; drop25: number; empGrowth: number; statusChange: boolean; finDistress: boolean; finGrowth: boolean; rapidGrowth: boolean }): OpportunityType {
   if (args.finDistress || args.drop25 > 0 || (args.statusChange && args.leadership >= 2)) return "turnaround";
+  // Rapid growth: small company scaling fast — leadership upgrade is the opportunity signal
+  if (args.rapidGrowth && !args.finDistress) return "rapid_growth";
   if (args.finGrowth && args.leadership <= 1 && !args.statusChange) return "growth";
   if (args.leadership > 0 || args.statusChange || args.empGrowth > 0) return "transition";
   return "stable";
@@ -248,6 +250,7 @@ type NewsArticleRow = {
   score_impact: number | null;
   sentiment_label: string | null;
   published_at: string;
+  growth_signal?: boolean | null;
 };
 
 // ─── Score ────────────────────────────────────────────────────────────────────
@@ -257,7 +260,7 @@ function calculateScore(company: CompanyRow, events: CompanyEventRow[], virk: Vi
   const factors: SignalFactor[] = [];
   const eventCounts = buildEventCounts(events);
   let score = 0;
-  let finDistress = false, finGrowth = false;
+  let finDistress = false, finGrowth = false, rapidGrowth = false;
 
   const ceoEvts = events.filter((e) => e.event_type === "CEO_CHANGED");
   const mgmtEvts = events.filter((e) => ["MANAGEMENT_CHANGED","BOARD_MEMBER_ADDED","BOARD_MEMBER_REMOVED","EXECUTIVE_ADDED","EXECUTIVE_REMOVED"].includes(e.event_type));
@@ -303,6 +306,34 @@ function calculateScore(company: CompanyRow, events: CompanyEventRow[], virk: Vi
       score += 15;
       factors.push({ code: "FINANCIAL_DISTRESS_LEADERSHIP", label: "Financial distress + leadership change", points: 15, event_count: leaderEvts.length, last_seen_at: latestAt(leaderEvts) });
     }
+
+    // ── Growth-stress signals (from financials) ─────────────────────────────
+    // Rapid revenue growth in small companies often forces a leadership upgrade —
+    // founders are replaced by professional management to sustain the scale.
+    if (fin.years.length >= 2) {
+      const [latest, prev] = [fin.years[0], fin.years[1]];
+      if (latest?.revenue && prev?.revenue && prev.revenue > 0 && !finDistress) {
+        const revenueGrowthPct = ((latest.revenue - prev.revenue) / Math.abs(prev.revenue)) * 100;
+
+        if (revenueGrowthPct > 50) {
+          // Hyper-growth: >50% YoY — very high leadership change pressure
+          const p = 15; score += p; rapidGrowth = true;
+          factors.push({
+            code: "HYPER_REVENUE_GROWTH",
+            label: `Revenue grew ${revenueGrowthPct.toFixed(0)}% YoY — hyper-growth pressure on leadership`,
+            points: p, event_count: 1, last_seen_at: now,
+          });
+        } else if (revenueGrowthPct > 30) {
+          // Rapid growth: 30–50% YoY
+          const p = 8; score += p; rapidGrowth = true;
+          factors.push({
+            code: "RAPID_REVENUE_GROWTH",
+            label: `Revenue grew ${revenueGrowthPct.toFixed(0)}% YoY — rapid growth may outpace current leadership`,
+            points: p, event_count: 1, last_seen_at: now,
+          });
+        }
+      }
+    }
   }
 
   // ── Virk signals ─────────────────────────────────────────────────────────────
@@ -333,7 +364,8 @@ function calculateScore(company: CompanyRow, events: CompanyEventRow[], virk: Vi
     if (crit.length) { score += 35; addFactor(factors, "CRITICAL_STATUS_CHANGE", "Critical company status", 35, crit); }
   }
 
-  const drop10: CompanyEventRow[] = [], drop25: CompanyEventRow[] = [], drop50: CompanyEventRow[] = [], empGrowth: CompanyEventRow[] = [];
+  const drop10: CompanyEventRow[] = [], drop25: CompanyEventRow[] = [], drop50: CompanyEventRow[] = [];
+  const empGrowth10: CompanyEventRow[] = [], empGrowth25: CompanyEventRow[] = [], empGrowth50: CompanyEventRow[] = [];
   for (const e of empEvts) {
     const { percentDrop, percentIncrease } = (() => {
       const old = extractNum(e.old_value), nw = extractNum(e.new_value);
@@ -343,12 +375,44 @@ function calculateScore(company: CompanyRow, events: CompanyEventRow[], virk: Vi
     if (percentDrop > 10) drop10.push(e);
     if (percentDrop > 25) drop25.push(e);
     if (percentDrop > 50) drop50.push(e);
-    if (percentIncrease > 10) empGrowth.push(e);
+    if (percentIncrease > 10) empGrowth10.push(e);
+    if (percentIncrease > 25) empGrowth25.push(e);
+    if (percentIncrease > 50) empGrowth50.push(e);
   }
+  // Drop signals (distress)
   if (drop10.length) { score += 8; addFactor(factors, "EMPLOYEE_DROP_10", "Employee count dropped >10%", 8, drop10); }
   if (drop25.length) { score += 15; addFactor(factors, "EMPLOYEE_DROP_25", "Employee count dropped >25%", 15, drop25); }
   if (drop50.length) { score += 25; addFactor(factors, "EMPLOYEE_DROP_50", "Employee count dropped >50%", 25, drop50); }
-  if (empGrowth.length) { score += 5; addFactor(factors, "EMPLOYEE_GROWTH", "Employee count increased", 5, empGrowth); }
+  // Growth signals — rapid hiring strains existing management
+  const empGrowth = empGrowth10; // keep reference for opportunity calc
+  if (empGrowth50.length) {
+    score += 12; rapidGrowth = true;
+    addFactor(factors, "HYPER_HIRING", "Employee count grew >50% — scaling pressure on management", 12, empGrowth50);
+  } else if (empGrowth25.length) {
+    score += 7; rapidGrowth = true;
+    addFactor(factors, "RAPID_HIRING", "Employee count grew >25% — rapid headcount expansion", 7, empGrowth25);
+  } else if (empGrowth10.length) {
+    score += 3;
+    addFactor(factors, "EMPLOYEE_GROWTH", "Employee count growing", 3, empGrowth10);
+  }
+  // Growth-stress combo: small company + rapid growth = leadership upgrade very likely
+  if (rapidGrowth && virk && virk.employeeCount !== null && virk.employeeCount <= 50 && !finDistress) {
+    score += 12;
+    factors.push({
+      code: "GROWTH_LEADERSHIP_PRESSURE",
+      label: `Small company (${virk.employeeCount} employees) scaling rapidly — leadership upgrade likely`,
+      points: 12, event_count: 1, last_seen_at: now,
+    });
+  }
+  // Young company scaling fast: founder-to-CEO transition risk is very high
+  if (rapidGrowth && virk?.foundedYear && (new Date().getFullYear() - virk.foundedYear) <= 5 && !finDistress) {
+    score += 8;
+    factors.push({
+      code: "STARTUP_GROWTH_LEADERSHIP_RISK",
+      label: `Young company (founded ${virk.foundedYear}) in rapid growth — founder-to-professional-CEO transition risk`,
+      points: 8, event_count: 1, last_seen_at: now,
+    });
+  }
 
   if (addrEvts.length) { const p = addrEvts.length * 5; score += p; addFactor(factors, "ADDRESS_CHANGED", "Address changed", p, addrEvts); }
   if (addrEvts.length >= 2) { score += 10; addFactor(factors, "MULTIPLE_ADDRESS_CHANGES", "Multiple address changes", 10, addrEvts); }
@@ -402,6 +466,23 @@ function calculateScore(company: CompanyRow, events: CompanyEventRow[], virk: Vi
         });
       }
     }
+
+    // ── Growth news signals ─────────────────────────────────────────────────
+    // Articles about funding rounds, expansion, rapid hiring indicate the company
+    // is scaling fast — even if financially healthy, this creates leadership change pressure.
+    const growthNewsArticles = (news as any[]).filter((a) => a.growth_signal === true);
+    if (growthNewsArticles.length > 0) {
+      const p = Math.min(10, growthNewsArticles.length * 4); // up to 10 pts
+      score += p; rapidGrowth = true;
+      const latestGrowth = [...growthNewsArticles].sort((a: any, b: any) => new Date(b.published_at).getTime() - new Date(a.published_at).getTime())[0];
+      factors.push({
+        code: "NEWS_GROWTH_SIGNAL",
+        label: `Growth-stage news (${growthNewsArticles.length} article${growthNewsArticles.length > 1 ? "s" : ""}: funding, expansion, hiring)`,
+        points: p,
+        event_count: growthNewsArticles.length,
+        last_seen_at: latestGrowth?.published_at ?? now,
+      });
+    }
   }
 
   score = Math.max(0, Math.min(100, score));
@@ -410,7 +491,7 @@ function calculateScore(company: CompanyRow, events: CompanyEventRow[], virk: Vi
   return {
     score,
     risk_level: toRiskLevel(score),
-    opportunity_type: toOpportunity({ leadership: leaderEvts.length, drop25: drop25.length, empGrowth: empGrowth.length, statusChange: statusEvts.length > 0, finDistress, finGrowth }),
+    opportunity_type: toOpportunity({ leadership: leaderEvts.length, drop25: drop25.length, empGrowth: empGrowth.length, statusChange: statusEvts.length > 0, finDistress, finGrowth, rapidGrowth }),
     risk_factors: factors,
     event_counts: eventCounts,
     summary: {
