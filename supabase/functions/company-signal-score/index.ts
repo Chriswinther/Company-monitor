@@ -253,9 +253,18 @@ type NewsArticleRow = {
   growth_signal?: boolean | null;
 };
 
+// ─── Job signal type ──────────────────────────────────────────────────────────
+
+type JobSignalRow = {
+  signal_type: string | null;
+  signal_score: number;
+  title: string;
+  published_at: string;
+};
+
 // ─── Score ────────────────────────────────────────────────────────────────────
 
-function calculateScore(company: CompanyRow, events: CompanyEventRow[], virk: VirkData, fin: FinancialData, news: NewsArticleRow[] = []) {
+function calculateScore(company: CompanyRow, events: CompanyEventRow[], virk: VirkData, fin: FinancialData, news: NewsArticleRow[] = [], jobSignals: JobSignalRow[] = []) {
   const now = new Date().toISOString();
   const factors: SignalFactor[] = [];
   const eventCounts = buildEventCounts(events);
@@ -485,6 +494,66 @@ function calculateScore(company: CompanyRow, events: CompanyEventRow[], virk: Vi
     }
   }
 
+  // ── Job posting signals (Jobindex) ──────────────────────────────────────────
+  // A company actively advertising executive/director roles on Jobindex is direct
+  // evidence that a leadership change is already in motion — or imminent.
+  if (jobSignals.length > 0) {
+    const execPosting = jobSignals.find((j) => j.signal_type === "EXECUTIVE_ROLE_POSTED");
+    const boardPosting = jobSignals.find((j) => j.signal_type === "BOARD_ROLE_POSTED");
+    const massHiring = jobSignals.find((j) => j.signal_type === "MASS_HIRING");
+    const restructure = jobSignals.find((j) => j.signal_type === "RESTRUCTURE_SIGNAL");
+    const seniorHiring = jobSignals.find((j) => j.signal_type === "SENIOR_HIRING");
+
+    if (execPosting) {
+      const pts = execPosting.signal_score;
+      score += pts;
+      factors.push({
+        code: "JOB_EXECUTIVE_VACANCY",
+        label: `Executive role posted on Jobindex: "${execPosting.title}"`,
+        points: pts, event_count: jobSignals.filter(j => j.signal_type === "EXECUTIVE_ROLE_POSTED").length,
+        last_seen_at: execPosting.published_at,
+      });
+    }
+    if (boardPosting) {
+      const pts = boardPosting.signal_score;
+      score += pts;
+      factors.push({
+        code: "JOB_BOARD_VACANCY",
+        label: `Board role advertised: "${boardPosting.title}"`,
+        points: pts, event_count: 1, last_seen_at: boardPosting.published_at,
+      });
+    }
+    if (restructure && !execPosting) {
+      const pts = 10;
+      score += pts; rapidGrowth = true;
+      factors.push({
+        code: "JOB_RESTRUCTURE_SIGNAL",
+        label: `Multiple senior roles posted simultaneously — org restructure in progress`,
+        points: pts, event_count: jobSignals.filter(j => j.signal_type === "RESTRUCTURE_SIGNAL").length,
+        last_seen_at: restructure.published_at,
+      });
+    }
+    if (massHiring && !execPosting && !rapidGrowth) {
+      const pts = 12;
+      score += pts; rapidGrowth = true;
+      factors.push({
+        code: "JOB_MASS_HIRING",
+        label: `${jobSignals.length} open positions on Jobindex — rapid headcount expansion`,
+        points: pts, event_count: jobSignals.length, last_seen_at: massHiring.published_at,
+      });
+    }
+    if (seniorHiring && !execPosting && !restructure) {
+      const pts = 8;
+      score += pts;
+      factors.push({
+        code: "JOB_SENIOR_HIRING",
+        label: `Senior leadership roles open on Jobindex`,
+        points: pts, event_count: jobSignals.filter(j => j.signal_type === "SENIOR_HIRING").length,
+        last_seen_at: seniorHiring.published_at,
+      });
+    }
+  }
+
   score = Math.max(0, Math.min(100, score));
   factors.sort((a, b) => b.points - a.points);
 
@@ -501,7 +570,7 @@ function calculateScore(company: CompanyRow, events: CompanyEventRow[], virk: Vi
       analyzed_events: events.length,
       analyzed_window_days: ANALYSIS_WINDOW_DAYS,
       calculated_at: now,
-      data_sources: { events: true, virk: !!virk, financials: !!fin, financial_years: fin?.years.length ?? 0, news: news.length },
+      data_sources: { events: true, virk: !!virk, financials: !!fin, financial_years: fin?.years.length ?? 0, news: news.length, job_signals: jobSignals.length },
     },
   };
 }
@@ -540,20 +609,28 @@ serve(async (req) => {
 
     const auth = virkUser && virkPass ? "Basic " + btoa(`${virkUser}:${virkPass}`) : null;
 
-    // Fetch Virk, financials, and cached news in parallel
-    const [virkData, finData, newsResult] = await Promise.all([
+    // Fetch Virk, financials, cached news, and job signals in parallel
+    const [virkData, finData, newsResult, jobResult] = await Promise.all([
       auth ? fetchVirkData(company.cvr_number, auth) : Promise.resolve(null),
       auth ? fetchFinancials(company.cvr_number, auth) : Promise.resolve(null),
       supabase
         .from("company_news")
-        .select("sentiment_score, score_impact, sentiment_label, published_at")
+        .select("sentiment_score, score_impact, sentiment_label, published_at, growth_signal")
         .eq("company_id", company.id)
         .gt("expires_at", new Date().toISOString())
         .order("published_at", { ascending: false })
         .limit(15),
+      supabase
+        .from("job_signals")
+        .select("signal_type, signal_score, title, published_at")
+        .eq("company_id", company.id)
+        .gt("expires_at", new Date().toISOString())
+        .order("signal_score", { ascending: false })
+        .limit(20),
     ]);
 
     const newsArticles: NewsArticleRow[] = newsResult.data ?? [];
+    const jobSignals: JobSignalRow[] = jobResult.data ?? [];
 
     // Update company record with fresh data
     if (virkData) {
@@ -565,7 +642,7 @@ serve(async (req) => {
       await supabase.from("companies").update(update).eq("id", company.id);
     }
 
-    const result = calculateScore(company as CompanyRow, (eventsData ?? []) as CompanyEventRow[], virkData, finData, newsArticles);
+    const result = calculateScore(company as CompanyRow, (eventsData ?? []) as CompanyEventRow[], virkData, finData, newsArticles, jobSignals);
 
     const { error: upsertError } = await supabase
       .from("company_risk_scores")
