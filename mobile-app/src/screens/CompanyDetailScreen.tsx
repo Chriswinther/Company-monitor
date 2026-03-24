@@ -293,13 +293,16 @@ export default function CompanyDetailScreen({ route }: any) {
     try {
       setSignalLoading(true);
       if (forceRecalculate) {
-        // Full recalculate via edge function — only on manual refresh tap
+        // Full recalculate via edge function
         setSignalScore(await getCompanySignalScore(selectedCvr));
+        // Also refresh history so sparkline reflects the new point
+        if (company?.id) {
+          setScoreHistory(await getCompanyScoreHistory(company.id, 30));
+        }
       } else {
         // Read stored score from DB — fast, no edge function call
         const stored = await getStoredCompanySignalScore(selectedCvr);
         if (stored) {
-          // Map StoredCompanyRiskScore to CompanySignalScoreV2 shape
           setSignalScore({
             score: stored.risk_score,
             risk_level: stored.risk_level as any,
@@ -315,7 +318,7 @@ export default function CompanyDetailScreen({ route }: any) {
       }
     } catch { setSignalScore(null); }
     finally { setSignalLoading(false); }
-  }, [selectedCvr]);
+  }, [selectedCvr, company?.id]);
 
   const loadEvents = useCallback(async () => {
     if (!company?.id) return;
@@ -341,10 +344,23 @@ export default function CompanyDetailScreen({ route }: any) {
     catch { setIsWatched(false); }
   }, [selectedCvr]);
 
+  // How often to auto-recalculate while the screen stays open
+  const SCORE_POLL_MS = 5 * 60 * 1000; // 5 minutes
+
   useEffect(() => { loadCompany(); }, [loadCompany]);
   useEffect(() => { if (!loading) { loadSignalScore(); loadWatchStatus(); } }, [loading]);
   useEffect(() => { if (company?.id) loadEvents(); }, [company?.id]);
   useEffect(() => { if (company?.id) loadScoreHistory(); }, [company?.id]);
+
+  // Auto-recalculate score when screen loads, then every 5 minutes —
+  // no manual Refresh needed. Stored score shows immediately while the
+  // edge function runs in the background.
+  useEffect(() => {
+    if (!selectedCvr || loading) return;
+    const initial = setTimeout(() => loadSignalScore(true), 800);
+    const poll    = setInterval(() => loadSignalScore(true), SCORE_POLL_MS);
+    return () => { clearTimeout(initial); clearInterval(poll); };
+  }, [selectedCvr, loading]);
 
   const handleToggleWatchlist = async () => {
     if (!selectedCvr) return Alert.alert('Error', 'Company CVR is missing');
@@ -435,7 +451,7 @@ export default function CompanyDetailScreen({ route }: any) {
             style={[styles.refreshBtn, signalLoading && styles.btnDisabled]}
             onPress={() => loadSignalScore(true)} disabled={signalLoading}
           >
-            <Text style={styles.refreshBtnText}>{signalLoading ? '...' : '↻ Refresh'}</Text>
+            <Text style={styles.refreshBtnText}>{signalLoading ? '↻ Updating…' : '↻ Refresh'}</Text>
           </TouchableOpacity>
         </View>
 
