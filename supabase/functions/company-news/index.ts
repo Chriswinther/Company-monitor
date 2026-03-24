@@ -177,6 +177,12 @@ serve(async (req) => {
 
     const scored = allArticles
       .filter((a) => a.title && a.url && a.title !== "[Removed]")
+      // Only keep articles where the company name actually appears in title or description.
+      // This prevents irrelevant articles from NewsAPI's loose free-tier matching.
+      .filter((a) => {
+        const text = `${a.title ?? ""} ${a.description ?? ""}`.toLowerCase();
+        return text.includes(cleanName.toLowerCase());
+      })
       .map((a) => {
         const sentiment = scoreSentiment(a.title ?? "", a.description ?? "");
         const relevance = a.title?.toLowerCase().includes(cleanName.toLowerCase()) ? 1.0 : 0.6;
