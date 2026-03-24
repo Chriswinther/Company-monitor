@@ -74,6 +74,125 @@ function scoreImpact(sentiment: number, relevanceScore: number): number {
   return 0;
 }
 
+// ─── Normalised article shape ─────────────────────────────────────────────────
+interface RawArticle {
+  title: string;
+  description: string | null;
+  url: string;
+  sourceName: string | null;
+  publishedAt: string | null;
+}
+
+// ─── NewsAPI fetcher ──────────────────────────────────────────────────────────
+
+async function fetchFromNewsApi(
+  cleanName: string,
+  apiKey: string,
+  seenUrls: Set<string>,
+): Promise<RawArticle[]> {
+  const fromDate = new Date(Date.now() - 28 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+
+  // We do NOT lock to language=da — NewsAPI indexes very few Danish-language sources.
+  // Instead we anchor each query with "Denmark" or "Danmark" to stay geographically
+  // relevant while picking up both English and Danish coverage.
+  const queries: { q: string; pageSize: number }[] = [
+    { q: `"${cleanName}" Denmark`,  pageSize: 10 }, // exact name + English country
+    { q: `"${cleanName}" Danmark`,  pageSize: 10 }, // exact name + Danish country
+    { q: `${cleanName} Denmark`,    pageSize: 5  }, // broader fallback
+  ];
+
+  const results: RawArticle[] = [];
+
+  for (const { q, pageSize } of queries) {
+    const url = new URL("https://newsapi.org/v2/everything");
+    url.searchParams.set("q", q);
+    url.searchParams.set("sortBy", "publishedAt");
+    url.searchParams.set("pageSize", String(pageSize));
+    url.searchParams.set("from", fromDate);
+
+    const res = await fetch(url.toString(), {
+      headers: { "X-Api-Key": apiKey },
+    });
+
+    if (!res.ok) {
+      console.warn(`NewsAPI error for query "${q}":`, res.status, await res.text());
+      continue;
+    }
+
+    const data = await res.json();
+    for (const a of data.articles ?? []) {
+      if (!a.url || seenUrls.has(a.url)) continue;
+      seenUrls.add(a.url);
+      results.push({
+        title: a.title ?? "",
+        description: a.description ?? null,
+        url: a.url,
+        sourceName: a.source?.name ?? null,
+        publishedAt: a.publishedAt ?? null,
+      });
+    }
+  }
+
+  return results;
+}
+
+// ─── newsdata.io fetcher ──────────────────────────────────────────────────────
+// newsdata.io natively supports country=dk which pulls from Berlingske, Børsen,
+// regional Danish papers, etc. — far better Danish coverage than NewsAPI.
+// Free tier: 200 credits/day. API key stored as NEWSDATA_API_KEY secret.
+
+async function fetchFromNewsdata(
+  cleanName: string,
+  apiKey: string,
+  seenUrls: Set<string>,
+): Promise<RawArticle[]> {
+  // Two passes: Danish-language sources first, then broader Danish-country search
+  const queries: { country?: string; language?: string }[] = [
+    { country: "dk", language: "da" }, // Danish-language Danish sources
+    { country: "dk" },                 // All languages from Danish sources (English coverage)
+  ];
+
+  const results: RawArticle[] = [];
+
+  for (const params of queries) {
+    const url = new URL("https://newsdata.io/api/1/news");
+    url.searchParams.set("apikey", apiKey);
+    url.searchParams.set("q", `"${cleanName}"`);
+    if (params.country) url.searchParams.set("country", params.country);
+    if (params.language) url.searchParams.set("language", params.language);
+    url.searchParams.set("size", "10");
+
+    const res = await fetch(url.toString());
+
+    if (!res.ok) {
+      console.warn(`newsdata.io error (${JSON.stringify(params)}):`, res.status, await res.text());
+      continue;
+    }
+
+    const data = await res.json();
+
+    if (data.status !== "success") {
+      console.warn("newsdata.io non-success status:", data.status, data.results?.message);
+      continue;
+    }
+
+    for (const a of data.results ?? []) {
+      const articleUrl = a.link ?? a.url;
+      if (!articleUrl || seenUrls.has(articleUrl)) continue;
+      seenUrls.add(articleUrl);
+      results.push({
+        title: a.title ?? "",
+        description: a.description ?? null,
+        url: articleUrl,
+        sourceName: a.source_name ?? a.source_id ?? null,
+        publishedAt: a.pubDate ?? null,
+      });
+    }
+  }
+
+  return results;
+}
+
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 serve(async (req) => {
@@ -83,6 +202,7 @@ serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const supabaseServiceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
     const newsApiKey = Deno.env.get("NEWS_API_KEY");
+    const newsdataApiKey = Deno.env.get("NEWSDATA_API_KEY"); // optional — Danish sources
 
     if (!supabaseUrl || !supabaseServiceRoleKey) {
       return jsonResponse(500, { error: "Missing Supabase env vars" });
@@ -121,64 +241,47 @@ serve(async (req) => {
 
     if (!company) return jsonResponse(404, { error: "Company not found" });
 
-    // ── 3. Build search queries ───────────────────────────────────────────────
-    // Strip legal suffixes for cleaner queries
+    // ── 3. Strip legal suffixes for cleaner queries ───────────────────────────
     const cleanName = company.name
       .replace(/\b(A\/S|ApS|I\/S|K\/S|P\/S|IVS|SE|SMBA)\b/gi, "")
       .trim();
 
-    // NewsAPI free tier only supports ~28 days lookback
-    const fromDate = new Date(Date.now() - 28 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
-
-    // We do NOT lock to language=da — NewsAPI indexes very few Danish-language sources.
-    // Instead we anchor each query with "Denmark" or "Danmark" to stay geographically
-    // relevant while picking up both English and Danish coverage.
-    const queries: { q: string; pageSize: number }[] = [
-      { q: `"${cleanName}" Denmark`,  pageSize: 10 }, // exact name + English country
-      { q: `"${cleanName}" Danmark`,  pageSize: 10 }, // exact name + Danish country
-      { q: `${cleanName} Denmark`,    pageSize: 5  }, // broader fallback
-    ];
-
-    const allArticles: any[] = [];
+    // ── 4. Fetch from all available news sources ──────────────────────────────
     const seenUrls = new Set<string>();
+    const allArticles: RawArticle[] = [];
 
-    for (const { q, pageSize } of queries) {
-      const url = new URL("https://newsapi.org/v2/everything");
-      url.searchParams.set("q", q);
-      url.searchParams.set("sortBy", "publishedAt");
-      url.searchParams.set("pageSize", String(pageSize));
-      url.searchParams.set("from", fromDate);
-
-      const res = await fetch(url.toString(), {
-        headers: { "X-Api-Key": newsApiKey },
-      });
-
-      if (!res.ok) {
-        console.warn(`NewsAPI error for query "${q}":`, res.status, await res.text());
-        continue;
+    // Source A: newsdata.io — best Danish coverage (country=dk filter)
+    if (newsdataApiKey) {
+      try {
+        const ndArticles = await fetchFromNewsdata(cleanName, newsdataApiKey, seenUrls);
+        allArticles.push(...ndArticles);
+        console.log(`newsdata.io: ${ndArticles.length} articles for "${cleanName}"`);
+      } catch (err) {
+        console.warn("newsdata.io fetch failed, skipping:", err);
       }
+    }
 
-      const data = await res.json();
-      for (const article of data.articles ?? []) {
-        if (!seenUrls.has(article.url)) {
-          seenUrls.add(article.url);
-          allArticles.push(article);
-        }
-      }
+    // Source B: NewsAPI — good English/international coverage of Danish companies
+    try {
+      const naArticles = await fetchFromNewsApi(cleanName, newsApiKey, seenUrls);
+      allArticles.push(...naArticles);
+      console.log(`NewsAPI: ${naArticles.length} articles for "${cleanName}"`);
+    } catch (err) {
+      console.warn("NewsAPI fetch failed, skipping:", err);
     }
 
     if (allArticles.length === 0) {
       return jsonResponse(200, { success: true, cached: false, articles: [], message: "No news found" });
     }
 
-    // ── 4. Score and store articles ───────────────────────────────────────────
+    // ── 5. Score and store articles ───────────────────────────────────────────
     const expires_at = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     const now = new Date().toISOString();
 
     const scored = allArticles
       .filter((a) => a.title && a.url && a.title !== "[Removed]")
       // Only keep articles where the company name actually appears in title or description.
-      // This prevents irrelevant articles from NewsAPI's loose free-tier matching.
+      // This prevents irrelevant articles from loose free-tier matching.
       .filter((a) => {
         const text = `${a.title ?? ""} ${a.description ?? ""}`.toLowerCase();
         return text.includes(cleanName.toLowerCase());
@@ -192,7 +295,7 @@ serve(async (req) => {
           title: a.title,
           description: a.description ?? null,
           url: a.url,
-          source_name: a.source?.name ?? null,
+          source_name: a.sourceName ?? null,
           published_at: a.publishedAt ?? now,
           sentiment_score: sentiment,
           sentiment_label: sentimentLabel(sentiment),
@@ -214,7 +317,7 @@ serve(async (req) => {
       }
     }
 
-    // ── 5. Update news signal in risk score ───────────────────────────────────
+    // ── 6. Update news signal in risk score ───────────────────────────────────
     const totalImpact = scored.reduce((sum, a) => sum + (a.score_impact ?? 0), 0);
     const clampedImpact = Math.max(-10, Math.min(25, totalImpact)); // cap contribution
 
@@ -255,6 +358,7 @@ serve(async (req) => {
       cached: false,
       articles: scored,
       news_score_impact: clampedImpact,
+      sources_used: newsdataApiKey ? ["newsdata.io", "newsapi.org"] : ["newsapi.org"],
     });
 
   } catch (error) {
