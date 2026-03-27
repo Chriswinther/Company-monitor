@@ -654,11 +654,12 @@ async function fetchCompanyFromVirkdata(cvr: string): Promise<CvrApiResponse> {
 
   const response = await fetch(
     `https://virkdata.dk/api/?search=${encodeURIComponent(cvr)}&format=json&country=dk`,
-    { headers: { Authorization: apiKey } }
+    { headers: { Authorization: `Token ${apiKey}` } }
   );
 
   if (!response.ok) {
-    throw new Error('Company not found in Virkdata API');
+    const body = await response.text().catch(() => '');
+    throw new Error(`Virkdata API error ${response.status}: ${body}`);
   }
 
   const data = await response.json();
@@ -667,7 +668,11 @@ async function fetchCompanyFromVirkdata(cvr: string): Promise<CvrApiResponse> {
     throw new Error(data?.error || 'Invalid Virkdata API response');
   }
 
-  return data;
+  // Virkdata may return an array (paginated) or a single object
+  const record = Array.isArray(data) ? data[0] : (data.results ? data.results[0] : data);
+  if (!record) throw new Error('No company found in Virkdata response');
+
+  return record;
 }
 
 async function fetchCompanyFromCvrApi(cvr: string): Promise<CvrApiResponse> {
@@ -675,7 +680,11 @@ async function fetchCompanyFromCvrApi(cvr: string): Promise<CvrApiResponse> {
   const virkdataKey = (process.env as any).EXPO_PUBLIC_VIRKDATA_API_KEY;
 
   if (virkdataKey) {
-    return fetchCompanyFromVirkdata(cleanCVR!);
+    try {
+      return await fetchCompanyFromVirkdata(cleanCVR!);
+    } catch (err) {
+      console.warn('[Virkdata] fetch failed, falling back to cvrapi.dk:', err);
+    }
   }
 
   const response = await fetch(
