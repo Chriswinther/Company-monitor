@@ -654,11 +654,12 @@ async function fetchCompanyFromVirkdata(cvr: string): Promise<CvrApiResponse> {
 
   const response = await fetch(
     `https://virkdata.dk/api/?search=${encodeURIComponent(cvr)}&format=json&country=dk`,
-    { headers: { Authorization: apiKey } }
+    { headers: { Authorization: `Token ${apiKey}` } }
   );
 
   if (!response.ok) {
-    throw new Error('Company not found in Virkdata API');
+    const body = await response.text().catch(() => '');
+    throw new Error(`Virkdata API error ${response.status}: ${body}`);
   }
 
   const data = await response.json();
@@ -667,7 +668,11 @@ async function fetchCompanyFromVirkdata(cvr: string): Promise<CvrApiResponse> {
     throw new Error(data?.error || 'Invalid Virkdata API response');
   }
 
-  return data;
+  // Virkdata may return an array (paginated) or a single object
+  const record = Array.isArray(data) ? data[0] : (data.results ? data.results[0] : data);
+  if (!record) throw new Error('No company found in Virkdata response');
+
+  return record;
 }
 
 async function fetchCompanyFromCvrApi(cvr: string): Promise<CvrApiResponse> {
@@ -675,7 +680,11 @@ async function fetchCompanyFromCvrApi(cvr: string): Promise<CvrApiResponse> {
   const virkdataKey = (process.env as any).EXPO_PUBLIC_VIRKDATA_API_KEY;
 
   if (virkdataKey) {
-    return fetchCompanyFromVirkdata(cleanCVR!);
+    try {
+      return await fetchCompanyFromVirkdata(cleanCVR!);
+    } catch (err) {
+      console.warn('[Virkdata] fetch failed, falling back to cvrapi.dk:', err);
+    }
   }
 
   const response = await fetch(
@@ -1039,6 +1048,52 @@ export async function getRankedCompanies(limit = 50): Promise<RankedCompany[]> {
     .filter((item: RankedCompany | null): item is RankedCompany => !!item);
 }
 
+export async function getAllCompaniesForSignals(): Promise<RankedCompany[]> {
+  const { data: companies, error: companiesError } = await supabase
+    .from('companies')
+    .select('id, cvr_number, name, status, industry, employee_count')
+    .order('name', { ascending: true })
+    .limit(500);
+
+  if (companiesError) throw companiesError;
+  if (!companies?.length) return [];
+
+  const companyIds = (companies as any[]).map((c) => c.id);
+  const { data: scores } = await supabase
+    .from('company_risk_scores')
+    .select('id, company_id, risk_score, risk_level, calculated_at')
+    .in('company_id', companyIds);
+
+  const scoreMap = new Map<string, any>();
+  for (const score of (scores || [])) {
+    const existing = scoreMap.get(score.company_id);
+    if (!existing || score.calculated_at > existing.calculated_at) {
+      scoreMap.set(score.company_id, score);
+    }
+  }
+
+  return (companies as any[])
+    .map((company): RankedCompany | null => {
+      const cvr = normalizeCvrNumber(company.cvr_number);
+      const name = firstNonEmptyString(company.name);
+      if (!cvr || !name) return null;
+      const score = scoreMap.get(company.id);
+      return {
+        id: score?.id ?? company.id,
+        company_id: company.id,
+        cvr_number: cvr,
+        name,
+        status: firstNonEmptyString(company.status),
+        industry: firstNonEmptyString(company.industry),
+        employee_count: firstNumber(company.employee_count),
+        risk_score: score ? Number(score.risk_score) : 0,
+        risk_level: (score?.risk_level as RiskLevel) ?? 'low',
+        calculated_at: firstNonEmptyString(score?.calculated_at),
+      };
+    })
+    .filter((item): item is RankedCompany => !!item);
+}
+
 export async function getCompanyByCVR(cvr: string) {
   const cleanCVR = normalizeCvrNumber(cvr);
 
@@ -1194,6 +1249,33 @@ export async function getEventFeed(limit = 50, offset = 0) {
 
   if (error) throw error;
   return data || [];
+}
+
+export async function getAllCompaniesWithScores(): Promise<Array<{
+  company: {
+    id: string; cvr_number: string; name: string; status: string | null;
+    address: Record<string, any> | null; industry: string | null;
+    employee_count: number | null; last_checked_at: string | null;
+  };
+  score: StoredCompanyRiskScore | null;
+}>> {
+  const [companiesResult, scoresResult] = await Promise.all([
+    supabase
+      .from('companies')
+      .select('id, cvr_number, name, status, address, industry, employee_count, last_checked_at')
+      .order('name', { ascending: true }),
+    supabase
+      .from('company_risk_scores')
+      .select('company_id, risk_score, risk_level, risk_factors, event_counts, calculated_at, updated_at'),
+  ]);
+
+  if (companiesResult.error) throw companiesResult.error;
+
+  const scoreMap = new Map((scoresResult.data ?? []).map((s: any) => [s.company_id, s]));
+  return (companiesResult.data ?? []).map((company: any) => ({
+    company,
+    score: (scoreMap.get(company.id) ?? null) as StoredCompanyRiskScore | null,
+  }));
 }
 
 export async function getWatchlist() {
