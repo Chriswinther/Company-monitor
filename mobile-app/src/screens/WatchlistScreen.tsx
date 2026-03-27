@@ -305,7 +305,9 @@ export default function WatchlistScreen({ navigation }: any) {
       {/* Page header */}
       <View style={styles.pageHeader}>
         <View style={styles.headerLeft}>
-          <Image source={require('../../assets/boyden-logo.png')} style={styles.logo} resizeMode="contain" />
+          <View style={styles.logoPill}>
+            <Image source={require('../../assets/boyden-logo.png')} style={styles.logo} resizeMode="contain" />
+          </View>
           <View style={styles.headerDivider} />
           <Text style={styles.headerTagline}>Watchlist</Text>
         </View>
@@ -535,7 +537,8 @@ const styles = StyleSheet.create({
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   headerDivider: { width: 1, height: 18, backgroundColor: 'rgba(255,255,255,0.2)' },
   headerTagline: { color: 'rgba(255,255,255,0.55)', fontSize: 10, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase' },
-  logo: { height: 34, width: 130, tintColor: '#FFFFFF' },
+  logoPill: { backgroundColor: '#FFFFFF', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 },
+  logo: { height: 22, width: 100 },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   headerCount: { alignItems: 'flex-end' },
   headerCountText: { color: '#FFFFFF', fontSize: 20, fontWeight: '800', lineHeight: 24 },
