@@ -4,8 +4,9 @@ import {
   RefreshControl, StyleSheet, Text, TextInput, View,
   type ListRenderItemInfo,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { getRankedCompanies, searchCompanies, addToWatchlist, type RankedCompany, type RiskLevel, type CompanySearchResult } from '../services/api';
+import { getAllCompaniesForSignals, getCompanySignalScore, searchCompanies, addToWatchlist, type RankedCompany, type RiskLevel, type CompanySearchResult } from '../services/api';
 import { B, getRiskColors, getScoreColor } from '../theme';
 
 type SortOption = 'score_desc' | 'score_asc' | 'name_asc';
@@ -92,14 +93,16 @@ const SignalCard = React.memo(({ item, rank, onPress }: SignalCardProps) => {
   );
 });
 
+const SCORE_POLL_MS = 10 * 60 * 1000;
+
 export default function SearchScreen({ navigation }: any) {
   const insets = useSafeAreaInsets();
+  const [allCompanies, setAllCompanies] = useState<RankedCompany[]>([]);
   const [ranked, setRanked] = useState<RankedCompany[]>([]);
   const [searchResults, setSearchResults] = useState<CompanySearchResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
+  const [scoring, setScoring] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [searchLoading, setSearchLoading] = useState(false);
@@ -108,43 +111,64 @@ export default function SearchScreen({ navigation }: any) {
   const [employeeRange, setEmployeeRange] = useState<EmployeeRange>('all');
   const [scoreFilter, setScoreFilter] = useState<ScoreFilter>('all');
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const pageRef = useRef(0);
   const [bulkAdding, setBulkAdding] = useState(false);
   const [bulkResult, setBulkResult] = useState<{ added: number; failed: number } | null>(null);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const allCompaniesRef = useRef<RankedCompany[]>([]);
   const isSearchMode = query.trim().length > 0;
 
+  const applyFilters = useCallback((data: RankedCompany[]) => {
+    let sorted = [...data];
+    if (sortBy === 'score_desc') sorted.sort((a, b) => b.risk_score - a.risk_score);
+    else if (sortBy === 'score_asc') sorted.sort((a, b) => a.risk_score - b.risk_score);
+    else if (sortBy === 'name_asc') sorted.sort((a, b) => a.name.localeCompare(b.name));
+    if (filterLevel !== 'all') sorted = sorted.filter((c) => (c.risk_level ?? '').toLowerCase() === filterLevel);
+    if (employeeRange !== 'all') {
+      sorted = sorted.filter((c) => {
+        const emp = c.employee_count ?? 0;
+        if (employeeRange === '10-50') return emp >= 10 && emp < 50;
+        if (employeeRange === '50-250') return emp >= 50 && emp < 250;
+        if (employeeRange === '250-1000') return emp >= 250 && emp < 1000;
+        if (employeeRange === '1000+') return emp >= 1000;
+        return true;
+      });
+    }
+    if (scoreFilter === '40plus') sorted = sorted.filter((c) => c.risk_score >= 40);
+    if (scoreFilter === '60plus') sorted = sorted.filter((c) => c.risk_score >= 60);
+    return sorted;
+  }, [sortBy, filterLevel, employeeRange, scoreFilter]);
+
   const fetchRanked = useCallback(async (reset = false) => {
-    const page = reset ? 0 : pageRef.current;
-    const offset = page * PAGE_SIZE;
     try {
-      if (reset) { setLoading(true); setError(null); } else { setLoadingMore(true); }
-      const data = await getRankedCompanies(PAGE_SIZE + offset);
-      let sorted = [...data];
-      if (sortBy === 'score_asc') sorted.sort((a, b) => a.risk_score - b.risk_score);
-      else if (sortBy === 'name_asc') sorted.sort((a, b) => a.name.localeCompare(b.name));
-      // Risk level filter
-      if (filterLevel !== 'all') sorted = sorted.filter((c) => (c.risk_level ?? '').toLowerCase() === filterLevel);
-      // Employee range filter
-      if (employeeRange !== 'all') {
-        sorted = sorted.filter((c) => {
-          const emp = c.employee_count ?? 0;
-          if (employeeRange === '10-50') return emp >= 10 && emp < 50;
-          if (employeeRange === '50-250') return emp >= 50 && emp < 250;
-          if (employeeRange === '250-1000') return emp >= 250 && emp < 1000;
-          if (employeeRange === '1000+') return emp >= 1000;
-          return true;
-        });
-      }
-      // Score filter
-      if (scoreFilter === '40plus') sorted = sorted.filter((c) => c.risk_score >= 40);
-      if (scoreFilter === '60plus') sorted = sorted.filter((c) => c.risk_score >= 60);
-      if (reset) { setRanked(sorted); pageRef.current = 1; } else { setRanked(sorted); pageRef.current = page + 1; }
-      setHasMore(data.length === PAGE_SIZE + offset);
+      if (reset) { setLoading(true); setError(null); }
+      const data = await getAllCompaniesForSignals();
+      allCompaniesRef.current = data;
+      setAllCompanies(data);
+      setRanked(applyFilters(data));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to load');
-    } finally { setLoading(false); setRefreshing(false); setLoadingMore(false); }
-  }, [sortBy, filterLevel]);
+    } finally { setLoading(false); setRefreshing(false); }
+  }, [applyFilters]);
+
+  // Background score refresh — recalculates via edge function in batches of 3
+  const refreshScores = useCallback(async () => {
+    const companies = allCompaniesRef.current;
+    if (!companies.length) return;
+    setScoring(true);
+    try {
+      for (let i = 0; i < companies.length; i += 3) {
+        await Promise.all(
+          companies.slice(i, i + 3).map((c) => getCompanySignalScore(c.cvr_number).catch(() => null))
+        );
+        if (i + 3 < companies.length) await new Promise((r) => setTimeout(r, 500));
+      }
+      await fetchRanked(false);
+    } catch (e) {
+      console.warn('[SearchScreen] refreshScores error:', e);
+    } finally {
+      setScoring(false);
+    }
+  }, [fetchRanked]);
 
   const fetchSearch = useCallback(async (q: string) => {
     if (!q.trim()) return;
@@ -156,7 +180,21 @@ export default function SearchScreen({ navigation }: any) {
     finally { setSearchLoading(false); }
   }, []);
 
-  useEffect(() => { fetchRanked(true); }, [sortBy, filterLevel, employeeRange, scoreFilter]);
+  // Re-apply filters whenever sort/filter state changes without refetching
+  useEffect(() => { setRanked(applyFilters(allCompaniesRef.current)); }, [applyFilters]);
+
+  // Initial load
+  useEffect(() => { fetchRanked(true); }, []);
+
+  // Auto-refresh scores every 10 minutes
+  useEffect(() => {
+    const t = setTimeout(refreshScores, 4000);
+    const p = setInterval(refreshScores, SCORE_POLL_MS);
+    return () => { clearTimeout(t); clearInterval(p); };
+  }, [refreshScores]);
+
+  // Reload when tab comes into focus
+  useFocusEffect(useCallback(() => { fetchRanked(false); }, [fetchRanked]));
 
   useEffect(() => {
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
@@ -166,7 +204,6 @@ export default function SearchScreen({ navigation }: any) {
   }, [query, fetchSearch]);
 
   const onRefresh = useCallback(() => { setRefreshing(true); fetchRanked(true); }, [fetchRanked]);
-  const onEndReached = useCallback(() => { if (!loadingMore && hasMore && !isSearchMode) fetchRanked(false); }, [loadingMore, hasMore, isSearchMode, fetchRanked]);
 
   const navigateToDetail = useCallback((item: RankedCompany | CompanySearchResult) => {
     navigation.navigate('CompanyDetail', {
@@ -176,14 +213,14 @@ export default function SearchScreen({ navigation }: any) {
   }, [navigation]);
 
   const handleBulkAdd = useCallback(async () => {
-    if (ranked.length === 0) return;
+    if (allCompanies.length === 0) return;
     const confirmed =
       typeof window !== 'undefined' && typeof window.confirm === 'function'
-        ? window.confirm(`Add all ${ranked.length} companies to your watchlist?`)
+        ? window.confirm(`Add all ${allCompanies.length} companies to your watchlist?`)
         : await new Promise<boolean>((resolve) =>
             Alert.alert(
               'Add All to Watchlist',
-              `Add ${ranked.length} companies to your watchlist?`,
+              `Add ${allCompanies.length} companies to your watchlist?`,
               [
                 { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
                 { text: 'Add All', onPress: () => resolve(true) },
@@ -196,7 +233,7 @@ export default function SearchScreen({ navigation }: any) {
       setBulkResult(null);
       let added = 0; let failed = 0;
       await Promise.all(
-        ranked.map(async (company) => {
+        allCompanies.map(async (company) => {
           try {
             await addToWatchlist(company.cvr_number);
             added++;
@@ -228,6 +265,14 @@ export default function SearchScreen({ navigation }: any) {
     <View>
       {!isSearchMode && (
         <>
+          {/* Scoring indicator */}
+          {scoring && (
+            <View style={styles.scoringBar}>
+              <ActivityIndicator size="small" color={B.blue} />
+              <Text style={styles.scoringText}>Updating scores...</Text>
+            </View>
+          )}
+
           {/* Row 1: Sort + Advanced toggle */}
           <View style={styles.filterBar}>
             <View style={styles.chipsRow}>
@@ -316,12 +361,16 @@ export default function SearchScreen({ navigation }: any) {
           {!loading && (
             <View style={styles.feedLabelRow}>
               <Text style={styles.feedLabel}>All Companies</Text>
-              <Text style={styles.feedCount}>{ranked.length} ranked</Text>
+              <Text style={styles.feedCount}>
+                {ranked.length !== allCompanies.length
+                  ? `${ranked.length} of ${allCompanies.length}`
+                  : `${allCompanies.length} total`}
+              </Text>
             </View>
           )}
 
           {/* Bulk add bar */}
-          {!loading && ranked.length > 0 && (
+          {!loading && allCompanies.length > 0 && (
             <View style={styles.bulkBar}>
               {bulkResult ? (
                 <View style={styles.bulkResult}>
@@ -339,7 +388,7 @@ export default function SearchScreen({ navigation }: any) {
                     <ActivityIndicator size="small" color={B.blue} />
                   ) : (
                     <Text style={styles.bulkBtnText}>
-                      + Add all {ranked.length} to Watchlist
+                      + Add all {allCompanies.length} to Watchlist
                     </Text>
                   )}
                 </Pressable>
@@ -350,7 +399,7 @@ export default function SearchScreen({ navigation }: any) {
       )}
 
     </View>
-  ), [isSearchMode, sortBy, filterLevel, employeeRange, scoreFilter, showAdvanced, loading, ranked, navigateToDetail]);
+  ), [isSearchMode, sortBy, filterLevel, employeeRange, scoreFilter, showAdvanced, loading, scoring, ranked, allCompanies, navigateToDetail, handleBulkAdd, bulkAdding, bulkResult]);
 
   if (loading && ranked.length === 0) {
     return (
@@ -420,7 +469,6 @@ export default function SearchScreen({ navigation }: any) {
       ) : (
         <FlatList data={ranked} keyExtractor={(i) => i.id} renderItem={renderRanked}
           ListHeaderComponent={ListHeader} keyboardShouldPersistTaps="handled"
-          ListFooterComponent={loadingMore ? <View style={styles.footerLoader}><ActivityIndicator size="small" color={B.blue} /></View> : null}
           ListEmptyComponent={loading ? null : (
             <View style={styles.emptyWrap}>
               <View style={styles.emptyIllustration}>
@@ -431,7 +479,6 @@ export default function SearchScreen({ navigation }: any) {
             </View>
           )}
           contentContainerStyle={styles.listContent} showsVerticalScrollIndicator={false}
-          onEndReached={onEndReached} onEndReachedThreshold={0.4}
           removeClippedSubviews maxToRenderPerBatch={12} windowSize={10}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={B.blue} colors={[B.blue]} />}
         />
@@ -445,6 +492,13 @@ const styles = StyleSheet.create({
   centered: { justifyContent: 'center', alignItems: 'center' },
   loadingText: { marginTop: 12, color: B.textMuted, fontSize: 14 },
   listContent: { paddingBottom: 40, flexGrow: 1 },
+
+  scoringBar: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 8, paddingVertical: 6, paddingHorizontal: B.pad,
+    backgroundColor: B.blueMuted, borderBottomWidth: 1, borderBottomColor: B.blueBorder,
+  },
+  scoringText: { color: B.blue, fontSize: 12, fontWeight: '600' },
 
   // Page header
   pageHeader: {

@@ -1039,6 +1039,52 @@ export async function getRankedCompanies(limit = 50): Promise<RankedCompany[]> {
     .filter((item: RankedCompany | null): item is RankedCompany => !!item);
 }
 
+export async function getAllCompaniesForSignals(): Promise<RankedCompany[]> {
+  const { data: companies, error: companiesError } = await supabase
+    .from('companies')
+    .select('id, cvr_number, name, status, industry, employee_count')
+    .order('name', { ascending: true })
+    .limit(500);
+
+  if (companiesError) throw companiesError;
+  if (!companies?.length) return [];
+
+  const companyIds = (companies as any[]).map((c) => c.id);
+  const { data: scores } = await supabase
+    .from('company_risk_scores')
+    .select('id, company_id, risk_score, risk_level, calculated_at')
+    .in('company_id', companyIds);
+
+  const scoreMap = new Map<string, any>();
+  for (const score of (scores || [])) {
+    const existing = scoreMap.get(score.company_id);
+    if (!existing || score.calculated_at > existing.calculated_at) {
+      scoreMap.set(score.company_id, score);
+    }
+  }
+
+  return (companies as any[])
+    .map((company): RankedCompany | null => {
+      const cvr = normalizeCvrNumber(company.cvr_number);
+      const name = firstNonEmptyString(company.name);
+      if (!cvr || !name) return null;
+      const score = scoreMap.get(company.id);
+      return {
+        id: score?.id ?? company.id,
+        company_id: company.id,
+        cvr_number: cvr,
+        name,
+        status: firstNonEmptyString(company.status),
+        industry: firstNonEmptyString(company.industry),
+        employee_count: firstNumber(company.employee_count),
+        risk_score: score ? Number(score.risk_score) : 0,
+        risk_level: (score?.risk_level as RiskLevel) ?? 'low',
+        calculated_at: firstNonEmptyString(score?.calculated_at),
+      };
+    })
+    .filter((item): item is RankedCompany => !!item);
+}
+
 export async function getCompanyByCVR(cvr: string) {
   const cleanCVR = normalizeCvrNumber(cvr);
 
