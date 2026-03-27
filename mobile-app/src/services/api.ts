@@ -99,7 +99,7 @@ export type Database = {
           role_group: 'executive' | 'board' | 'owner' | 'other' | null;
           registered_since: string | null;
           registered_until: string | null;
-          source: 'cvr.dev' | 'datafordeler' | 'cvrapi.dk' | 'manual';
+          source: 'cvr.dev' | 'datafordeler' | 'cvrapi.dk' | 'virk' | 'manual';
           source_reference: string | null;
           is_current: boolean;
           is_primary: boolean;
@@ -114,7 +114,7 @@ export type Database = {
           role_group?: 'executive' | 'board' | 'owner' | 'other' | null;
           registered_since?: string | null;
           registered_until?: string | null;
-          source?: 'cvr.dev' | 'datafordeler' | 'cvrapi.dk' | 'manual';
+          source?: 'cvr.dev' | 'datafordeler' | 'cvrapi.dk' | 'virk' | 'manual';
           source_reference?: string | null;
           is_current?: boolean;
           is_primary?: boolean;
@@ -125,7 +125,7 @@ export type Database = {
           role_group?: 'executive' | 'board' | 'owner' | 'other' | null;
           registered_since?: string | null;
           registered_until?: string | null;
-          source?: 'cvr.dev' | 'datafordeler' | 'cvrapi.dk' | 'manual';
+          source?: 'cvr.dev' | 'datafordeler' | 'cvrapi.dk' | 'virk' | 'manual';
           source_reference?: string | null;
           is_current?: boolean;
           is_primary?: boolean;
@@ -251,7 +251,7 @@ export type Database = {
           role_group: 'executive' | 'board' | 'owner' | 'other' | null;
           registered_since: string | null;
           registered_until: string | null;
-          source: 'cvr.dev' | 'datafordeler' | 'cvrapi.dk' | 'manual';
+          source: 'cvr.dev' | 'datafordeler' | 'cvrapi.dk' | 'virk' | 'manual';
           source_reference: string | null;
           is_current: boolean;
           is_primary: boolean;
@@ -270,6 +270,8 @@ export type EventType =
   | 'BOARD_MEMBER_REMOVED'
   | 'EXECUTIVE_ADDED'
   | 'EXECUTIVE_REMOVED'
+  | 'OWNER_ADDED'
+  | 'OWNER_REMOVED'
   | 'ADDRESS_CHANGED'
   | 'STATUS_CHANGED'
   | 'NAME_CHANGED'
@@ -1053,7 +1055,7 @@ export async function getAllCompaniesForSignals(): Promise<RankedCompany[]> {
     .from('companies')
     .select('id, cvr_number, name, status, industry, employee_count')
     .order('name', { ascending: true })
-    .limit(500);
+    .limit(10000);
 
   if (companiesError) throw companiesError;
   if (!companies?.length) return [];

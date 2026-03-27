@@ -554,17 +554,17 @@ const styles = StyleSheet.create({
   resetBtnText: { color: B.riskCritical, fontSize: 12, fontWeight: '700' },
 
   // Spotlight
-  spotlightWrap: { paddingHorizontal: B.pad, marginBottom: 8, marginTop: 4 },
-  spotlightTitle: { color: B.textSecondary, fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8 },
-  spotlightRow: { flexDirection: 'row', gap: 8 },
+  spotlightWrap: { paddingHorizontal: B.pad, marginBottom: 6, marginTop: 2 },
+  spotlightTitle: { color: B.textSecondary, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 6 },
+  spotlightRow: { flexDirection: 'row', gap: 6 },
   spotlightCard: {
-    flex: 1, backgroundColor: B.bgCard, borderRadius: B.radius, padding: 12,
-    borderWidth: 1, borderColor: B.border, alignItems: 'center', gap: 4,
+    flex: 1, backgroundColor: B.bgCard, borderRadius: B.radius, padding: 8,
+    borderWidth: 1, borderColor: B.border, alignItems: 'center', gap: 2,
     shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4, shadowOffset: { width: 0, height: 1 }, elevation: 1,
   },
-  spotlightRank: { fontSize: 11, fontWeight: '800' },
-  spotlightName: { color: B.textSecondary, fontSize: 11, fontWeight: '600', textAlign: 'center', lineHeight: 15 },
-  spotlightScore: { fontSize: 20, fontWeight: '900' },
+  spotlightRank: { fontSize: 10, fontWeight: '800' },
+  spotlightName: { color: B.textSecondary, fontSize: 10, fontWeight: '600', textAlign: 'center', lineHeight: 13 },
+  spotlightScore: { fontSize: 16, fontWeight: '900' },
 
   // Feed label
   feedLabelRow: {
@@ -577,27 +577,27 @@ const styles = StyleSheet.create({
   // Signal card
   card: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: B.bgCard, marginHorizontal: B.pad, marginBottom: 3,
-    borderRadius: B.radiusSm, paddingVertical: 8, paddingHorizontal: 10,
+    backgroundColor: B.bgCard, marginHorizontal: B.pad, marginBottom: 1,
+    borderRadius: B.radiusSm, paddingVertical: 5, paddingHorizontal: 8,
     borderWidth: 1, borderColor: B.border,
     elevation: 0,
   },
   cardPressed: { opacity: 0.75, backgroundColor: B.bgCardAlt },
-  cardRank: { width: 30, alignItems: 'center' },
-  rankText: { fontSize: 11 },
-  cardInfo: { flex: 1, marginLeft: 6, marginRight: 6 },
-  cardName: { color: B.textPrimary, fontSize: 13, fontWeight: '700', marginBottom: 1 },
-  cardMeta: { flexDirection: 'row', gap: 5, marginBottom: 4, flexWrap: 'wrap' },
-  cardIndustry: { color: B.textMuted, fontSize: 10 },
-  cardCvr: { color: B.textMuted, fontSize: 9, fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace' },
+  cardRank: { width: 26, alignItems: 'center' },
+  rankText: { fontSize: 10 },
+  cardInfo: { flex: 1, marginLeft: 5, marginRight: 5 },
+  cardName: { color: B.textPrimary, fontSize: 12, fontWeight: '700', marginBottom: 1 },
+  cardMeta: { flexDirection: 'row', gap: 4, marginBottom: 3, flexWrap: 'wrap' },
+  cardIndustry: { color: B.textMuted, fontSize: 9 },
+  cardCvr: { color: B.textMuted, fontSize: 8, fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace' },
   riskPill: {
     flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start',
-    borderWidth: 1, borderRadius: B.radiusFull, paddingHorizontal: 6, paddingVertical: 2, gap: 3,
+    borderWidth: 1, borderRadius: B.radiusFull, paddingHorizontal: 5, paddingVertical: 1, gap: 3,
   },
   riskDot: { width: 4, height: 4, borderRadius: 2 },
-  riskPillText: { fontSize: 8, fontWeight: '800', letterSpacing: 0.4 },
-  cardScore: { alignItems: 'center', minWidth: 38 },
-  scoreValue: { fontSize: 18, fontWeight: '900', lineHeight: 22 },
+  riskPillText: { fontSize: 7, fontWeight: '800', letterSpacing: 0.4 },
+  cardScore: { alignItems: 'center', minWidth: 32 },
+  scoreValue: { fontSize: 15, fontWeight: '900', lineHeight: 18 },
   scoreLabel: { color: B.textMuted, fontSize: 7, fontWeight: '700', letterSpacing: 1, marginTop: 1 },
 
   // Search result
