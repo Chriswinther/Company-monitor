@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import {
   View, Text, FlatList, StyleSheet, TouchableOpacity,
@@ -7,7 +7,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   getWatchlist, removeFromWatchlist, getStoredCompanySignalScore,
-  getCompanyEvents, type StoredCompanyRiskScore,
+  getCompanyEvents, getCompanySignalScore, getAllCompaniesWithScores,
+  type StoredCompanyRiskScore,
 } from '../services/api';
 import { supabase } from '../services/supabase';
 import { B, getRiskColors, getScoreColor, formatDate } from '../theme';
@@ -22,7 +23,7 @@ interface WatchlistItem {
   notification_enabled: boolean; company: WatchlistCompany[] | WatchlistCompany | null;
 }
 interface EnrichedWatchlistItem {
-  watchlistItem: WatchlistItem; company: WatchlistCompany;
+  watchlistItem: WatchlistItem | null; company: WatchlistCompany;
   score: StoredCompanyRiskScore | null;
   latestEventDescription: string | null; latestEventType: string | null; latestEventAt: string | null;
 }
@@ -44,8 +45,8 @@ function getEventIcon(eventType: string | null): string {
 
 const ROW_HEIGHT = 52;
 
-const WatchlistRow = React.memo(({ item, index, isRemoving, onPress, onRemove }: {
-  item: EnrichedWatchlistItem; index: number; isRemoving: boolean;
+const WatchlistRow = React.memo(({ item, index, isRemoving, showRemove, onPress, onRemove }: {
+  item: EnrichedWatchlistItem; index: number; isRemoving: boolean; showRemove: boolean;
   onPress: () => void; onRemove: () => void;
 }) => {
   const { company, score, latestEventType, latestEventAt } = item;
@@ -76,14 +77,17 @@ const WatchlistRow = React.memo(({ item, index, isRemoving, onPress, onRemove }:
       <Text style={[styles.rowScore, { color: scoreColor }]}>
         {scoreValue !== null ? Math.round(scoreValue) : '—'}
       </Text>
-      <Pressable
-        style={({ pressed }) => [styles.removeBtn, pressed && styles.removeBtnActive, isRemoving && styles.btnDisabled]}
-        onPress={(e) => { e.stopPropagation(); onRemove(); }}
-        disabled={isRemoving}
-        hitSlop={10}
-      >
-        <Text style={styles.removeBtnText}>✕</Text>
-      </Pressable>
+      {showRemove && (
+        <Pressable
+          style={({ pressed }) => [styles.removeBtn, pressed && styles.removeBtnActive, isRemoving && styles.btnDisabled]}
+          onPress={(e) => { e.stopPropagation(); onRemove(); }}
+          disabled={isRemoving}
+          hitSlop={10}
+        >
+          <Text style={styles.removeBtnText}>✕</Text>
+        </Pressable>
+      )}
+      {!showRemove && <View style={{ width: 28 }} />}
     </Pressable>
   );
 });
@@ -99,6 +103,11 @@ export default function WatchlistScreen({ navigation }: any) {
   const [filterSize, setFilterSize] = useState<string>('all');
   const [filterActivity, setFilterActivity] = useState<string>('all');
   const [sortBy, setSortBy] = useState<string>('score');
+  const [viewMode, setViewMode] = useState<'watchlist' | 'all'>('watchlist');
+  const [scoring, setScoring] = useState(false);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
+  const enrichedRef = useRef<EnrichedWatchlistItem[]>([]);
+  useEffect(() => { enrichedRef.current = enriched; }, [enriched]);
 
   const loadData = useCallback(async () => {
     try {
@@ -126,6 +135,7 @@ export default function WatchlistScreen({ navigation }: any) {
           .filter((i): i is EnrichedWatchlistItem => i !== null)
           .sort((a, b) => (b.score?.risk_score ?? -1) - (a.score?.risk_score ?? -1))
       );
+      setLastUpdatedAt(new Date());
     } catch (error) {
       console.error('[WatchlistScreen] loadData error:', error);
     } finally {
@@ -134,21 +144,76 @@ export default function WatchlistScreen({ navigation }: any) {
     }
   }, []);
 
+  const loadAllData = useCallback(async () => {
+    try {
+      const all = await getAllCompaniesWithScores();
+      setEnriched(
+        all.map(({ company, score }) => ({
+          watchlistItem: null,
+          company: company as WatchlistCompany,
+          score: score ?? null,
+          latestEventDescription: null,
+          latestEventType: null,
+          latestEventAt: null,
+        })).sort((a, b) => (b.score?.risk_score ?? -1) - (a.score?.risk_score ?? -1))
+      );
+      setLastUpdatedAt(new Date());
+    } catch (error) {
+      console.error('[WatchlistScreen] loadAllData error:', error);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  const load = useCallback(async () => {
+    if (viewMode === 'watchlist') await loadData();
+    else await loadAllData();
+  }, [viewMode, loadData, loadAllData]);
+
+  // Background score refresh — recalculates via edge function in batches of 3
+  const refreshScores = useCallback(async () => {
+    const companies = enrichedRef.current.map((e) => e.company);
+    if (!companies.length) return;
+    setScoring(true);
+    try {
+      for (let i = 0; i < companies.length; i += 3) {
+        await Promise.all(
+          companies.slice(i, i + 3).map((c) => getCompanySignalScore(c.cvr_number).catch(() => null))
+        );
+        if (i + 3 < companies.length) await new Promise((r) => setTimeout(r, 500));
+      }
+      await load();
+    } catch (e) {
+      console.warn('[WatchlistScreen] refreshScores error:', e);
+    } finally {
+      setScoring(false);
+    }
+  }, [load]);
+
+  // Auto-refresh scores every 10 minutes while screen is mounted
+  const SCORE_POLL_MS = 10 * 60 * 1000;
+  useEffect(() => {
+    const t = setTimeout(refreshScores, 4000); // initial refresh shortly after mount
+    const p = setInterval(refreshScores, SCORE_POLL_MS);
+    return () => { clearTimeout(t); clearInterval(p); };
+  }, [refreshScores]);
+
   // Reload every time the tab comes into focus so adds from other screens show immediately
   useFocusEffect(
     useCallback(() => {
-      loadData();
-    }, [loadData])
+      load();
+    }, [load])
   );
 
   useEffect(() => {
     const channel = supabase.channel('watchlist_changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'watchlists' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'watchlists' }, () => load())
       .subscribe();
     return () => { channel.unsubscribe(); };
-  }, [loadData]);
+  }, [load]);
 
-  const onRefresh = useCallback(() => { setRefreshing(true); loadData(); }, [loadData]);
+  const onRefresh = useCallback(() => { setRefreshing(true); load(); }, [load]);
 
   const handleOpen = useCallback((item: EnrichedWatchlistItem) => {
     navigation.navigate('CompanyDetail', {
@@ -157,6 +222,7 @@ export default function WatchlistScreen({ navigation }: any) {
   }, [navigation]);
 
   const handleRemove = useCallback(async (item: EnrichedWatchlistItem) => {
+    if (!item.watchlistItem) return;
     try {
       setRemovingId(item.watchlistItem.id);
       await removeFromWatchlist(item.company.cvr_number);
@@ -226,7 +292,9 @@ export default function WatchlistScreen({ navigation }: any) {
   const hasActiveFilters = filterRisk !== 'all' || filterSize !== 'all' || filterActivity !== 'all' || sortBy !== 'score';
 
   const renderItem = useCallback(({ item, index }: { item: EnrichedWatchlistItem; index: number }) => (
-    <WatchlistRow item={item} index={index} isRemoving={removingId === item.watchlistItem.id}
+    <WatchlistRow item={item} index={index}
+      isRemoving={removingId === (item.watchlistItem?.id ?? '')}
+      showRemove={!!item.watchlistItem}
       onPress={() => handleOpen(item)} onRemove={() => handleRemove(item)} />
   ), [removingId, handleOpen, handleRemove, filtered]);
 
@@ -237,13 +305,39 @@ export default function WatchlistScreen({ navigation }: any) {
       {/* Page header */}
       <View style={styles.pageHeader}>
         <Image source={require('../../assets/boyden-logo.png')} style={styles.logo} resizeMode="contain" />
-        <View style={styles.headerCount}>
-          <Text style={styles.headerCountText}>{filtered.length}</Text>
-          <Text style={styles.headerCountLabel}>
-            {filtered.length !== enriched.length ? `of ${enriched.length}` : 'companies'}
-          </Text>
+        <View style={styles.headerRight}>
+          {/* View mode toggle */}
+          <View style={styles.viewToggle}>
+            <Pressable
+              style={[styles.viewToggleBtn, viewMode === 'watchlist' && styles.viewToggleBtnActive]}
+              onPress={() => { setViewMode('watchlist'); setLoading(true); }}
+            >
+              <Text style={[styles.viewToggleTxt, viewMode === 'watchlist' && styles.viewToggleTxtActive]}>Watchlist</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.viewToggleBtn, viewMode === 'all' && styles.viewToggleBtnActive]}
+              onPress={() => { setViewMode('all'); setLoading(true); }}
+            >
+              <Text style={[styles.viewToggleTxt, viewMode === 'all' && styles.viewToggleTxtActive]}>All</Text>
+            </Pressable>
+          </View>
+          <View style={styles.headerCount}>
+            <Text style={styles.headerCountText}>{filtered.length}</Text>
+            <Text style={styles.headerCountLabel}>
+              {filtered.length !== enriched.length ? `of ${enriched.length}` : 'companies'}
+            </Text>
+          </View>
         </View>
       </View>
+      {/* Scoring status bar */}
+      {(scoring || lastUpdatedAt) && (
+        <View style={styles.statusBar}>
+          {scoring
+            ? <><ActivityIndicator size="small" color={B.blue} style={{ marginRight: 6 }} /><Text style={styles.statusText}>Updating scores...</Text></>
+            : <Text style={styles.statusText}>Scores updated {lastUpdatedAt ? Math.round((Date.now() - lastUpdatedAt.getTime()) / 60000) : 0}m ago</Text>
+          }
+        </View>
+      )}
 
       {/* Search + filter bar */}
       {enriched.length > 0 && (
@@ -435,9 +529,24 @@ const styles = StyleSheet.create({
     backgroundColor: B.bgCard, borderBottomWidth: 1, borderBottomColor: B.border,
   },
   logo: { height: 26, width: 100 },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   headerCount: { alignItems: 'flex-end' },
   headerCountText: { color: B.blue, fontSize: 20, fontWeight: '800', lineHeight: 24 },
   headerCountLabel: { color: B.textMuted, fontSize: 11, fontWeight: '600' },
+  viewToggle: {
+    flexDirection: 'row', borderRadius: B.radiusSm,
+    borderWidth: 1, borderColor: B.border, overflow: 'hidden',
+  },
+  viewToggleBtn: { paddingHorizontal: 10, paddingVertical: 5, backgroundColor: B.bgCardAlt },
+  viewToggleBtnActive: { backgroundColor: B.blue },
+  viewToggleTxt: { color: B.textMuted, fontSize: 11, fontWeight: '700' },
+  viewToggleTxtActive: { color: '#fff' },
+  statusBar: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: B.pad, paddingVertical: 5,
+    backgroundColor: B.bgCardAlt, borderBottomWidth: 1, borderBottomColor: B.border,
+  },
+  statusText: { color: B.textMuted, fontSize: 11 },
 
   colHeader: {
     flexDirection: 'row', alignItems: 'center', paddingHorizontal: B.pad, paddingVertical: 8,

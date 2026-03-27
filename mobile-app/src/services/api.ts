@@ -1196,6 +1196,33 @@ export async function getEventFeed(limit = 50, offset = 0) {
   return data || [];
 }
 
+export async function getAllCompaniesWithScores(): Promise<Array<{
+  company: {
+    id: string; cvr_number: string; name: string; status: string | null;
+    address: Record<string, any> | null; industry: string | null;
+    employee_count: number | null; last_checked_at: string | null;
+  };
+  score: StoredCompanyRiskScore | null;
+}>> {
+  const [companiesResult, scoresResult] = await Promise.all([
+    supabase
+      .from('companies')
+      .select('id, cvr_number, name, status, address, industry, employee_count, last_checked_at')
+      .order('name', { ascending: true }),
+    supabase
+      .from('company_risk_scores')
+      .select('company_id, risk_score, risk_level, risk_factors, event_counts, calculated_at, updated_at'),
+  ]);
+
+  if (companiesResult.error) throw companiesResult.error;
+
+  const scoreMap = new Map((scoresResult.data ?? []).map((s: any) => [s.company_id, s]));
+  return (companiesResult.data ?? []).map((company: any) => ({
+    company,
+    score: (scoreMap.get(company.id) ?? null) as StoredCompanyRiskScore | null,
+  }));
+}
+
 export async function getWatchlist() {
   const user = await requireUser();
 
