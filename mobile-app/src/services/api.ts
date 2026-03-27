@@ -648,11 +648,38 @@ async function fetchEdgeFunctionJson<TResponse>(
   return data as TResponse;
 }
 
-async function fetchCompanyFromCvrApi(cvr: string): Promise<CvrApiResponse> {
-  const cleanCVR = normalizeCvrNumber(cvr);
+async function fetchCompanyFromVirkdata(cvr: string): Promise<CvrApiResponse> {
+  const apiKey = (process.env as any).EXPO_PUBLIC_VIRKDATA_API_KEY;
+  if (!apiKey) throw new Error('Virkdata API key not configured');
 
   const response = await fetch(
-    `https://cvrapi.dk/api?search=${encodeURIComponent(cleanCVR)}&country=dk`
+    `https://virkdata.dk/api/?search=${encodeURIComponent(cvr)}&format=json&country=dk`,
+    { headers: { Authorization: apiKey } }
+  );
+
+  if (!response.ok) {
+    throw new Error('Company not found in Virkdata API');
+  }
+
+  const data = await response.json();
+
+  if (!data || data.error) {
+    throw new Error(data?.error || 'Invalid Virkdata API response');
+  }
+
+  return data;
+}
+
+async function fetchCompanyFromCvrApi(cvr: string): Promise<CvrApiResponse> {
+  const cleanCVR = normalizeCvrNumber(cvr);
+  const virkdataKey = (process.env as any).EXPO_PUBLIC_VIRKDATA_API_KEY;
+
+  if (virkdataKey) {
+    return fetchCompanyFromVirkdata(cleanCVR!);
+  }
+
+  const response = await fetch(
+    `https://cvrapi.dk/api?search=${encodeURIComponent(cleanCVR!)}&country=dk`
   );
 
   if (!response.ok) {
