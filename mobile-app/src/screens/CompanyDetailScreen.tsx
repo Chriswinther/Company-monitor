@@ -360,7 +360,7 @@ export default function CompanyDetailScreen({ route }: any) {
     const initial = setTimeout(() => loadSignalScore(true), 800);
     const poll    = setInterval(() => loadSignalScore(true), SCORE_POLL_MS);
     return () => { clearTimeout(initial); clearInterval(poll); };
-  }, [selectedCvr, loading]);
+  }, [selectedCvr, loading, loadSignalScore]);
 
   const handleToggleWatchlist = async () => {
     if (!selectedCvr) return Alert.alert('Error', 'Company CVR is missing');

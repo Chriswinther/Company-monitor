@@ -22,6 +22,7 @@ type FinancialYear = {
   long_term_debt: number | null;
   period_start: string | null;
   period_end: string | null;
+  filing_date: string | null;
 };
 
 type FinancialData = {
@@ -29,8 +30,11 @@ type FinancialData = {
   latest: FinancialYear | null;
   revenue_trend: "growing" | "declining" | "stable" | "unknown";
   equity_negative: boolean;
+  equity_below_minimum: boolean;
   consecutive_losses: number;
   debt_ratio: number | null;
+  gross_margin_compressing: boolean;
+  late_filing: boolean;
 } | null;
 
 type VirkData = {
@@ -206,6 +210,7 @@ async function fetchFinancials(cvr: string, auth: string): Promise<FinancialData
       const period = doc?.regnskabsperiode ?? doc?.offentliggoerelse?.regnskabsperiode ?? {};
       const year = period?.slutDato ? new Date(period.slutDato).getFullYear() : new Date().getFullYear();
 
+      const filingDate = doc?.offentliggoerelse?.offentliggoerelsesTidspunkt ?? null;
       return {
         year,
         revenue: extractXbrl(facts, "nettoomsaetning", "NetRevenue", "GrossRevenue"),
@@ -218,6 +223,7 @@ async function fetchFinancials(cvr: string, auth: string): Promise<FinancialData
         long_term_debt: extractXbrl(facts, "LangfristetGaeld", "LongtermDebt"),
         period_start: period?.startDato ?? null,
         period_end: period?.slutDato ?? null,
+        filing_date: typeof filingDate === "string" ? filingDate : null,
       };
     }).filter((y): y is FinancialYear => y !== null).sort((a, b) => b.year - a.year);
 
@@ -239,7 +245,28 @@ async function fetchFinancials(cvr: string, auth: string): Promise<FinancialData
     const totalDebt = (latest.short_term_debt ?? 0) + (latest.long_term_debt ?? 0);
     const debt_ratio = latest.total_assets && latest.total_assets > 0 ? totalDebt / latest.total_assets : null;
 
-    return { years, latest, revenue_trend, equity_negative: (latest.equity ?? 0) < 0, consecutive_losses, debt_ratio };
+    // Gross margin compression: margin declining across 3 consecutive years
+    let gross_margin_compressing = false;
+    if (years.length >= 3) {
+      const margins = years.slice(0, 3).map((y) =>
+        y.revenue && y.revenue > 0 && y.gross_profit !== null ? y.gross_profit / y.revenue : null
+      );
+      if (margins[0] !== null && margins[1] !== null && margins[2] !== null) {
+        gross_margin_compressing = margins[0] < margins[1] && margins[1] < margins[2];
+      }
+    }
+
+    // Late filing: annual accounts must be filed within 5 months (150 days) of period end
+    let late_filing = false;
+    if (latest.period_end && latest.filing_date) {
+      const lagDays = (new Date(latest.filing_date).getTime() - new Date(latest.period_end).getTime()) / 86400000;
+      late_filing = lagDays > 150;
+    }
+
+    // Equity below Danish legal minimum (ApS: 40,000 DKK) but not yet negative
+    const equity_below_minimum = (latest.equity ?? 0) > 0 && (latest.equity ?? 0) < 40000;
+
+    return { years, latest, revenue_trend, equity_negative: (latest.equity ?? 0) < 0, equity_below_minimum, consecutive_losses, debt_ratio, gross_margin_compressing, late_filing };
   } catch (err) { console.warn("Financials error:", err); return null; }
 }
 
@@ -273,9 +300,12 @@ function calculateScore(company: CompanyRow, events: CompanyEventRow[], virk: Vi
 
   const ceoEvts = events.filter((e) => e.event_type === "CEO_CHANGED");
   const mgmtEvts = events.filter((e) => ["MANAGEMENT_CHANGED","BOARD_MEMBER_ADDED","BOARD_MEMBER_REMOVED","EXECUTIVE_ADDED","EXECUTIVE_REMOVED"].includes(e.event_type));
+  const boardRemovals = events.filter((e) => e.event_type === "BOARD_MEMBER_REMOVED");
   const statusEvts = events.filter((e) => e.event_type === "STATUS_CHANGED");
   const empEvts = events.filter((e) => e.event_type === "EMPLOYEE_COUNT_CHANGED");
   const addrEvts = events.filter((e) => e.event_type === "ADDRESS_CHANGED");
+  const ownershipEvts = events.filter((e) => e.event_type === "OWNERSHIP_CHANGED");
+  const nameEvts = events.filter((e) => e.event_type === "NAME_CHANGED");
   const leaderEvts = [...ceoEvts, ...mgmtEvts];
 
   // ── Financial signals ────────────────────────────────────────────────────────
@@ -314,6 +344,30 @@ function calculateScore(company: CompanyRow, events: CompanyEventRow[], virk: Vi
     if (finDistress && leaderEvts.length > 0) {
       score += 15;
       factors.push({ code: "FINANCIAL_DISTRESS_LEADERSHIP", label: "Financial distress + leadership change", points: 15, event_count: leaderEvts.length, last_seen_at: latestAt(leaderEvts) });
+    }
+    if (fin.equity_below_minimum) {
+      score += 18; finDistress = true;
+      factors.push({ code: "EQUITY_BELOW_MINIMUM", label: "Equity below Danish legal minimum (40,000 DKK) — near insolvency", points: 18, event_count: 1, last_seen_at: now });
+    }
+    if (fin.gross_margin_compressing) {
+      score += 10;
+      factors.push({ code: "GROSS_MARGIN_COMPRESSION", label: "Gross margin compressing across 3 consecutive years", points: 10, event_count: 3, last_seen_at: now });
+    }
+    if (fin.late_filing) {
+      score += 12;
+      factors.push({ code: "LATE_ANNUAL_FILING", label: "Annual accounts filed more than 5 months after period end", points: 12, event_count: 1, last_seen_at: fin.latest?.filing_date ?? now });
+    }
+    // Revenue-employee mismatch: growing headcount but revenue declining
+    if (fin.years.length >= 2) {
+      const [latestFin, prevFin] = [fin.years[0], fin.years[1]];
+      if (latestFin?.revenue !== null && prevFin?.revenue !== null && prevFin.revenue > 0) {
+        const revGrowthPct = ((latestFin.revenue - prevFin.revenue) / Math.abs(prevFin.revenue)) * 100;
+        const hadEmpGrowth = empEvts.some((e) => { const old = extractNum(e.old_value), nw = extractNum(e.new_value); return old !== null && nw !== null && nw > old; });
+        if (hadEmpGrowth && revGrowthPct < -5) {
+          score += 10;
+          factors.push({ code: "HEADCOUNT_REVENUE_MISMATCH", label: "Headcount growing while revenue declining — efficiency problem", points: 10, event_count: 1, last_seen_at: now });
+        }
+      }
     }
 
     // ── Growth-stress signals (from financials) ─────────────────────────────
@@ -426,6 +480,35 @@ function calculateScore(company: CompanyRow, events: CompanyEventRow[], virk: Vi
   if (addrEvts.length) { const p = addrEvts.length * 5; score += p; addFactor(factors, "ADDRESS_CHANGED", "Address changed", p, addrEvts); }
   if (addrEvts.length >= 2) { score += 10; addFactor(factors, "MULTIPLE_ADDRESS_CHANGES", "Multiple address changes", 10, addrEvts); }
 
+  // ── Ownership change signals ──────────────────────────────────────────────
+  if (ownershipEvts.length) {
+    const p = Math.min(25, ownershipEvts.length * 15);
+    score += p;
+    addFactor(factors, "OWNERSHIP_CHANGED", "Ownership structure changed", p, ownershipEvts);
+  }
+
+  // ── Name change signal ────────────────────────────────────────────────────
+  if (nameEvts.length) {
+    score += 5;
+    addFactor(factors, "NAME_CHANGED", "Company name changed — rebranding often follows strategy or leadership shift", 5, nameEvts);
+  }
+
+  // ── Board exodus: multiple board members removed within 90 days ───────────
+  const s90b = new Date(daysAgoIso(WINDOW_90_DAYS)).getTime();
+  const recentBoardRemovals = boardRemovals.filter((e) => new Date(e.detected_at).getTime() >= s90b);
+  if (recentBoardRemovals.length >= 2) {
+    score += 15;
+    addFactor(factors, "BOARD_EXODUS", `${recentBoardRemovals.length} board members removed within 90 days — board exodus signal`, 15, recentBoardRemovals);
+  }
+
+  // ── Rapid CEO turnover: 2+ CEO changes in 24 months ──────────────────────
+  const s24mo = new Date(); s24mo.setFullYear(s24mo.getFullYear() - 2);
+  const recentCeoChanges = ceoEvts.filter((e) => new Date(e.detected_at).getTime() >= s24mo.getTime());
+  if (recentCeoChanges.length >= 2) {
+    score += 20;
+    addFactor(factors, "RAPID_CEO_TURNOVER", `${recentCeoChanges.length} CEO changes in 24 months — leadership instability`, 20, recentCeoChanges);
+  }
+
   const s30 = new Date(daysAgoIso(WINDOW_30_DAYS)).getTime(), s90 = new Date(daysAgoIso(WINDOW_90_DAYS)).getTime();
   const last30 = events.filter((e) => new Date(e.detected_at).getTime() >= s30);
   const last90 = events.filter((e) => new Date(e.detected_at).getTime() >= s90);
@@ -444,6 +527,29 @@ function calculateScore(company: CompanyRow, events: CompanyEventRow[], virk: Vi
   }
   if (new Set(last90.map((e) => e.event_type)).size >= 3) {
     score += 12; factors.push({ code: "MULTI_SIGNAL_PATTERN", label: "3+ signal types in 90 days", points: 12, event_count: new Set(last90.map((e) => e.event_type)).size, last_seen_at: latestAt(last90) });
+  }
+
+  // ── Additional combination patterns ──────────────────────────────────────
+  const WINDOW_180_DAYS = 180;
+  // Ownership change + leadership change within 180 days — acquisition or hostile takeover prep
+  if (ownershipEvts.some((o) => leaderEvts.some((l) => withinDays(o.detected_at, l.detected_at, WINDOW_180_DAYS)))) {
+    score += 15;
+    factors.push({ code: "OWNERSHIP_LEADERSHIP_COMBO", label: "Ownership change + leadership change within 180 days — acquisition/transition signal", points: 15, event_count: ownershipEvts.length + leaderEvts.length, last_seen_at: latestAt([...ownershipEvts, ...leaderEvts]) });
+  }
+  // Acquisition prep triple: address change + board removals + ownership change within 90 days
+  if (addrEvts.length > 0 && recentBoardRemovals.length > 0 && ownershipEvts.some((o) => new Date(o.detected_at).getTime() >= s90)) {
+    score += 20;
+    factors.push({ code: "ACQUISITION_PREP_PATTERN", label: "Address change + board reduction + ownership change within 90 days — classic acquisition prep", points: 20, event_count: 3, last_seen_at: latestAt([...addrEvts, ...recentBoardRemovals, ...ownershipEvts]) });
+  }
+  // Late filing + CEO change — classic distress pattern
+  if (fin?.late_filing && ceoEvts.length > 0) {
+    score += 12;
+    factors.push({ code: "LATE_FILING_CEO_CHANGE", label: "Late annual filing + CEO change — classic financial distress pattern", points: 12, event_count: ceoEvts.length, last_seen_at: latestAt(ceoEvts) });
+  }
+  // Name change + ownership change within 90 days — restructuring signal
+  if (nameEvts.some((n) => ownershipEvts.some((o) => withinDays(n.detected_at, o.detected_at, WINDOW_90_DAYS)))) {
+    score += 8;
+    factors.push({ code: "NAME_OWNERSHIP_COMBO", label: "Company rename + ownership change within 90 days — post-acquisition restructuring", points: 8, event_count: nameEvts.length + ownershipEvts.length, last_seen_at: latestAt([...nameEvts, ...ownershipEvts]) });
   }
 
   // ── News sentiment ───────────────────────────────────────────────────────────
