@@ -654,7 +654,7 @@ async function fetchCompanyFromVirkdata(cvr: string): Promise<CvrApiResponse> {
 
   const response = await fetch(
     `https://virkdata.dk/api/?search=${encodeURIComponent(cvr)}&format=json&country=dk`,
-    { headers: { Authorization: `Token ${apiKey}` } }
+    { headers: { Authorization: apiKey } }
   );
 
   if (!response.ok) {
