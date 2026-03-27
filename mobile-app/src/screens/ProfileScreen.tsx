@@ -239,7 +239,11 @@ export default function ProfileScreen() {
 
       {/* Logo header */}
       <View style={styles.pageHeader}>
-        <Image source={require('../../assets/boyden-logo.png')} style={styles.logo} resizeMode="contain" />
+        <View style={styles.headerLeft}>
+          <Image source={require('../../assets/boyden-logo.png')} style={styles.logo} resizeMode="contain" />
+          <View style={styles.headerDivider} />
+          <Text style={styles.headerTagline}>Profile</Text>
+        </View>
       </View>
 
       {/* Profile card */}
@@ -358,10 +362,13 @@ const styles = StyleSheet.create({
   errorText: { color: B.textMuted, fontSize: 15 },
 
   pageHeader: {
-    backgroundColor: B.bgCard, paddingHorizontal: B.padLg, paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: B.border,
+    backgroundColor: B.bgNavy, paddingHorizontal: B.pad, paddingTop: 18, paddingBottom: 14,
+    borderBottomWidth: 0, flexDirection: 'row', alignItems: 'center',
   },
-  logo: { height: 26, width: 100 },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  headerDivider: { width: 1, height: 18, backgroundColor: 'rgba(255,255,255,0.2)' },
+  headerTagline: { color: 'rgba(255,255,255,0.55)', fontSize: 10, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase' },
+  logo: { height: 34, width: 130, tintColor: '#FFFFFF' },
 
   profileCard: {
     backgroundColor: B.bgCard, alignItems: 'center', padding: B.padLg,

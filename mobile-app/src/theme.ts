@@ -1,30 +1,40 @@
 // ─── Boyden Brand Theme ───────────────────────────────────────────────────────
 
 export const B = {
-  // Core brand colors
-  blue:        '#4A90D9',
-  blueDark:    '#2E6DB4',
-  blueLight:   '#6AAEE3',
-  blueMuted:   'rgba(74,144,217,0.12)',
-  blueBorder:  'rgba(74,144,217,0.22)',
-  blueStrong:  'rgba(74,144,217,0.08)',
+  // Core brand — deep executive navy + Boyden blue
+  navy:        '#0C1E35',
+  navyMid:     '#1A3352',
+  blue:        '#2B6CB0',
+  blueDark:    '#1A4F8A',
+  blueLight:   '#4A90D9',
+  blueMuted:   'rgba(43,108,176,0.10)',
+  blueBorder:  'rgba(43,108,176,0.20)',
+  blueStrong:  'rgba(43,108,176,0.06)',
 
-  // Backgrounds — subtle blue tint throughout
-  bg:          '#F0F5FC',   // very subtle blue tint on page bg
+  // Gold accent — executive warmth
+  gold:        '#C4972A',
+  goldDark:    '#A07820',
+  goldMuted:   'rgba(196,151,42,0.10)',
+  goldBorder:  'rgba(196,151,42,0.28)',
+
+  // Backgrounds
+  bg:          '#F4F7FB',
   bgCard:      '#FFFFFF',
-  bgCardAlt:   '#EEF4FB',   // blue-tinted alt card
-  bgCardBlue:  'rgba(74,144,217,0.06)', // accent card bg
-  bgInput:     '#F4F8FD',   // blue-tinted input
+  bgCardAlt:   '#EEF3FA',
+  bgCardBlue:  'rgba(43,108,176,0.05)',
+  bgInput:     '#F0F5FC',
+  bgNavy:      '#0C1E35',
 
   // Text
-  textPrimary:   '#1C2B3A',
-  textSecondary: '#5A6A7A',
-  textMuted:     '#9DAEBF',
+  textPrimary:   '#0C1E35',
+  textSecondary: '#4A5E75',
+  textMuted:     '#8BA0B8',
   textInverse:   '#FFFFFF',
+  textGold:      '#C4972A',
 
   // Borders
-  border:        '#D8E6F5',   // slightly blue-tinted border
-  borderStrong:  '#B8D0EA',
+  border:        '#D4E2F0',
+  borderStrong:  '#B0C8E0',
 
   // Risk colors
   riskCritical:  '#DC2626',
@@ -39,14 +49,14 @@ export const B = {
 
   // Tab bar
   tabBg:         '#FFFFFF',
-  tabBorder:     '#D8E6F5',
-  tabActive:     '#4A90D9',
-  tabInactive:   '#9DAEBF',
+  tabBorder:     '#D4E2F0',
+  tabActive:     '#2B6CB0',
+  tabInactive:   '#8BA0B8',
 
-  // Header — subtle blue gradient feel
+  // Header
   headerBg:      '#FFFFFF',
-  headerBorder:  '#D8E6F5',
-  headerText:    '#1C2B3A',
+  headerBorder:  '#D4E2F0',
+  headerText:    '#0C1E35',
 
   // Spacing
   pad:    16,
@@ -66,7 +76,7 @@ export function getRiskColors(level?: string | null) {
     case 'high':     return { bg: '#FFF7ED', border: '#FED7AA', text: '#EA580C', dot: '#EA580C' };
     case 'moderate': return { bg: '#FFFBEB', border: '#FDE68A', text: '#D97706', dot: '#D97706' };
     case 'low':      return { bg: '#F0FDF4', border: '#BBF7D0', text: '#16A34A', dot: '#16A34A' };
-    default:         return { bg: '#EEF4FB', border: '#D8E6F5', text: '#9DAEBF', dot: '#9DAEBF' };
+    default:         return { bg: '#EEF3FA', border: '#D4E2F0', text: '#8BA0B8', dot: '#8BA0B8' };
   }
 }
 

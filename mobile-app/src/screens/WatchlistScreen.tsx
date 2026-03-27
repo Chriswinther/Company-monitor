@@ -304,7 +304,11 @@ export default function WatchlistScreen({ navigation }: any) {
     <View>
       {/* Page header */}
       <View style={styles.pageHeader}>
-        <Image source={require('../../assets/boyden-logo.png')} style={styles.logo} resizeMode="contain" />
+        <View style={styles.headerLeft}>
+          <Image source={require('../../assets/boyden-logo.png')} style={styles.logo} resizeMode="contain" />
+          <View style={styles.headerDivider} />
+          <Text style={styles.headerTagline}>Watchlist</Text>
+        </View>
         <View style={styles.headerRight}>
           {/* View mode toggle */}
           <View style={styles.viewToggle}>
@@ -525,21 +529,24 @@ const styles = StyleSheet.create({
 
   pageHeader: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: B.pad, paddingTop: 16, paddingBottom: 12,
-    backgroundColor: B.bgCard, borderBottomWidth: 1, borderBottomColor: B.border,
+    paddingHorizontal: B.pad, paddingTop: 18, paddingBottom: 14,
+    backgroundColor: B.bgNavy, borderBottomWidth: 0,
   },
-  logo: { height: 26, width: 100 },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  headerDivider: { width: 1, height: 18, backgroundColor: 'rgba(255,255,255,0.2)' },
+  headerTagline: { color: 'rgba(255,255,255,0.55)', fontSize: 10, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase' },
+  logo: { height: 34, width: 130, tintColor: '#FFFFFF' },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   headerCount: { alignItems: 'flex-end' },
-  headerCountText: { color: B.blue, fontSize: 20, fontWeight: '800', lineHeight: 24 },
-  headerCountLabel: { color: B.textMuted, fontSize: 11, fontWeight: '600' },
+  headerCountText: { color: '#FFFFFF', fontSize: 20, fontWeight: '800', lineHeight: 24 },
+  headerCountLabel: { color: 'rgba(255,255,255,0.5)', fontSize: 11, fontWeight: '600' },
   viewToggle: {
     flexDirection: 'row', borderRadius: B.radiusSm,
-    borderWidth: 1, borderColor: B.border, overflow: 'hidden',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)', overflow: 'hidden',
   },
-  viewToggleBtn: { paddingHorizontal: 10, paddingVertical: 5, backgroundColor: B.bgCardAlt },
+  viewToggleBtn: { paddingHorizontal: 10, paddingVertical: 5, backgroundColor: 'rgba(255,255,255,0.08)' },
   viewToggleBtnActive: { backgroundColor: B.blue },
-  viewToggleTxt: { color: B.textMuted, fontSize: 11, fontWeight: '700' },
+  viewToggleTxt: { color: 'rgba(255,255,255,0.6)', fontSize: 11, fontWeight: '700' },
   viewToggleTxtActive: { color: '#fff' },
   statusBar: {
     flexDirection: 'row', alignItems: 'center',

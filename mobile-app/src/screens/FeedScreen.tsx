@@ -151,7 +151,11 @@ export default function FeedScreen({ navigation }: any) {
     <View>
       {/* Boyden header */}
       <View style={styles.pageHeader}>
-        <Image source={require('../../assets/boyden-logo.png')} style={styles.logo} resizeMode="contain" />
+        <View style={styles.headerLeft}>
+          <Image source={require('../../assets/boyden-logo.png')} style={styles.logo} resizeMode="contain" />
+          <View style={styles.headerDivider} />
+          <Text style={styles.headerTagline}>Executive Intelligence</Text>
+        </View>
         <View style={styles.liveBadge}>
           <View style={styles.liveDot} />
           <Text style={styles.liveText}>LIVE</Text>
@@ -279,26 +283,28 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: B.pad,
-    paddingTop: 16,
-    paddingBottom: 12,
-    backgroundColor: B.bgCard,
-    borderBottomWidth: 1,
-    borderBottomColor: B.border,
+    paddingTop: 18,
+    paddingBottom: 14,
+    backgroundColor: B.bgNavy,
+    borderBottomWidth: 0,
   },
-  logo: { height: 28, width: 110 },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  headerDivider: { width: 1, height: 18, backgroundColor: 'rgba(255,255,255,0.2)' },
+  headerTagline: { color: 'rgba(255,255,255,0.55)', fontSize: 10, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase' },
+  logo: { height: 34, width: 130, tintColor: '#FFFFFF' },
   liveBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    backgroundColor: '#F0FDF4',
+    backgroundColor: 'rgba(22,163,74,0.15)',
     borderWidth: 1,
-    borderColor: '#BBF7D0',
+    borderColor: 'rgba(22,163,74,0.35)',
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: B.radiusFull,
   },
   liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: B.success },
-  liveText: { color: B.success, fontSize: 10, fontWeight: '800', letterSpacing: 1 },
+  liveText: { color: '#4ADE80', fontSize: 10, fontWeight: '800', letterSpacing: 1 },
 
   // Today's top section
   todaySection: {

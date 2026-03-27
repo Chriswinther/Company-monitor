@@ -427,8 +427,11 @@ export default function SearchScreen({ navigation }: any) {
     <View style={styles.container}>
       {/* Page header — static, never re-renders */}
       <View style={styles.pageHeader}>
-        <Image source={require('../../assets/boyden-logo.png')} style={styles.logo} resizeMode="contain" />
-        <Text style={styles.pageHeaderSub}>Signal Leaderboard</Text>
+        <View style={styles.headerLeft}>
+          <Image source={require('../../assets/boyden-logo.png')} style={styles.logo} resizeMode="contain" />
+          <View style={styles.headerDivider} />
+          <Text style={styles.headerTagline}>Signal Leaderboard</Text>
+        </View>
       </View>
 
       {/* Search bar — outside FlatList so it never loses focus */}
@@ -503,11 +506,13 @@ const styles = StyleSheet.create({
   // Page header
   pageHeader: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: B.pad, paddingTop: 16, paddingBottom: 12,
-    backgroundColor: B.bgCard, borderBottomWidth: 1, borderBottomColor: B.border,
+    paddingHorizontal: B.pad, paddingTop: 18, paddingBottom: 14,
+    backgroundColor: B.bgNavy, borderBottomWidth: 0,
   },
-  logo: { height: 26, width: 100 },
-  pageHeaderSub: { color: B.textMuted, fontSize: 12, fontWeight: '600' },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  headerDivider: { width: 1, height: 18, backgroundColor: 'rgba(255,255,255,0.2)' },
+  headerTagline: { color: 'rgba(255,255,255,0.55)', fontSize: 10, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase' },
+  logo: { height: 34, width: 130, tintColor: '#FFFFFF' },
 
   // Search
   searchWrap: {

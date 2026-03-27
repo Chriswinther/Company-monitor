@@ -157,10 +157,10 @@ function MainTabs() {
         },
       })}
     >
-      <Tab.Screen name="Feed" component={FeedScreen} options={{ title: 'Feed' }} />
-      <Tab.Screen name="Signals" component={SearchScreen} options={{ title: 'Signals' }} />
-      <Tab.Screen name="Watchlist" component={WatchlistScreen} options={{ title: 'Watchlist' }} />
-      <Tab.Screen name="Profile" component={ProfileScreen} options={{ title: 'Profile' }} />
+      <Tab.Screen name="Feed" component={FeedScreen} options={{ headerShown: false }} />
+      <Tab.Screen name="Signals" component={SearchScreen} options={{ headerShown: false }} />
+      <Tab.Screen name="Watchlist" component={WatchlistScreen} options={{ headerShown: false }} />
+      <Tab.Screen name="Profile" component={ProfileScreen} options={{ headerShown: false }} />
     </Tab.Navigator>
   );
 }
