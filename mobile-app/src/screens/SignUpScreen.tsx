@@ -16,26 +16,35 @@ export default function SignUpScreen({ navigation }: any) {
 
   const handleSignUp = async () => {
     const cleanEmail = email.trim();
-    setMessage(''); setMessageType(''); 
+    setMessage(''); setMessageType('');
     if (!cleanEmail || !password || !confirmPassword) { setMessage('Please fill in all fields'); setMessageType('error'); return; }
     if (password !== confirmPassword) { setMessage('Passwords do not match'); setMessageType('error'); return; }
     if (password.length < 6) { setMessage('Password must be at least 6 characters'); setMessageType('error'); return; }
-    if (!cleanEmail.endsWith('@boyden.com')) {
-  setMessage('Access is restricted to Boyden email addresses only.');
-  setMessageType('error');
-  return;
-}
+    if (!cleanEmail.endsWith('@boyden.com') && !cleanEmail.endsWith('@boyden.dk')) {
+      setMessage('Access is restricted to Boyden email addresses only.');
+      setMessageType('error');
+      return;
+    }
     setLoading(true);
     try {
       const { data, error } = await supabase.auth.signUp({ email: cleanEmail, password });
-if (error) { 
-  const msg = error.message.includes('restricted') || error.message.includes('Boyden')
-    ? 'Access is restricted to Boyden email addresses only.'
-    : error.message;
-  setMessage(msg); 
-  setMessageType('error'); 
-  return; 
-}
+      if (error) {
+        const msg = error.message.includes('restricted') || error.message.includes('Boyden')
+          ? 'Access is restricted to Boyden email addresses only.'
+          : error.message;
+        setMessage(msg);
+        setMessageType('error');
+        return;
+      }
+      setMessage('Account created! Check your inbox if email confirmation is enabled.');
+      setMessageType('success');
+      setTimeout(() => navigation.goBack(), 1500);
+    } catch (error: any) {
+      setMessage(error?.message || 'Something went wrong');
+      setMessageType('error');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -53,7 +62,7 @@ if (error) {
 
           <Text style={styles.inputLabel}>Email</Text>
           <TextInput
-            style={styles.input} placeholder="you@company.com" placeholderTextColor={B.textMuted}
+            style={styles.input} placeholder="you@boyden.com" placeholderTextColor={B.textMuted}
             value={email} onChangeText={setEmail} autoCapitalize="none" autoCorrect={false}
             keyboardType="email-address" editable={!loading}
           />
