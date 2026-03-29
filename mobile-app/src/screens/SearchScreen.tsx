@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator, Alert, FlatList, Image, Platform, Pressable,
-  RefreshControl, StyleSheet, Text, TextInput, View,
+  ActivityIndicator, FlatList, Image, Platform, Pressable,
+  RefreshControl, ScrollView, StyleSheet, Text, TextInput, View,
   type ListRenderItemInfo,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
@@ -64,12 +64,9 @@ const SignalCard = React.memo(({ item, rank, onPress }: SignalCardProps) => {
 
   return (
     <Pressable style={({ pressed }) => [styles.card, pressed && styles.cardPressed]} onPress={onPress}>
-      {/* Rank */}
       <View style={styles.cardRank}>
         <Text style={[styles.rankText, { color: rankStyle.color, fontWeight: rankStyle.weight }]}>#{rank}</Text>
       </View>
-
-      {/* Info */}
       <View style={styles.cardInfo}>
         <Text style={styles.cardName} numberOfLines={1}>{item.name}</Text>
         <View style={styles.cardMeta}>
@@ -83,8 +80,6 @@ const SignalCard = React.memo(({ item, rank, onPress }: SignalCardProps) => {
           </Text>
         </View>
       </View>
-
-      {/* Score */}
       <View style={styles.cardScore}>
         <Text style={[styles.scoreValue, { color: scoreColor }]}>{Math.round(item.risk_score)}</Text>
         <Text style={styles.scoreLabel}>SCORE</Text>
@@ -110,12 +105,23 @@ export default function SearchScreen({ navigation }: any) {
   const [filterLevel, setFilterLevel] = useState<FilterLevel>('all');
   const [employeeRange, setEmployeeRange] = useState<EmployeeRange>('all');
   const [scoreFilter, setScoreFilter] = useState<ScoreFilter>('all');
+  const [industryFilter, setIndustryFilter] = useState<string>('all');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [bulkAdding, setBulkAdding] = useState(false);
   const [bulkResult, setBulkResult] = useState<{ added: number; failed: number } | null>(null);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const allCompaniesRef = useRef<RankedCompany[]>([]);
   const isSearchMode = query.trim().length > 0;
+
+  // Build unique industry list from loaded companies
+  const availableIndustries = useMemo(() => {
+    const industries = allCompanies
+      .map((c) => c.industry)
+      .filter((i): i is string => !!i && i.trim() !== '');
+    return ['all', ...Array.from(new Set(industries)).sort()];
+  }, [allCompanies]);
+
+  const hasActiveFilters = filterLevel !== 'all' || employeeRange !== 'all' || scoreFilter !== 'all' || industryFilter !== 'all';
 
   const applyFilters = useCallback((data: RankedCompany[]) => {
     let sorted = [...data];
@@ -135,8 +141,13 @@ export default function SearchScreen({ navigation }: any) {
     }
     if (scoreFilter === '40plus') sorted = sorted.filter((c) => c.risk_score >= 40);
     if (scoreFilter === '60plus') sorted = sorted.filter((c) => c.risk_score >= 60);
+    if (industryFilter !== 'all') {
+      sorted = sorted.filter((c) =>
+        (c.industry ?? '').toLowerCase().includes(industryFilter.toLowerCase())
+      );
+    }
     return sorted;
-  }, [sortBy, filterLevel, employeeRange, scoreFilter]);
+  }, [sortBy, filterLevel, employeeRange, scoreFilter, industryFilter]);
 
   const fetchRanked = useCallback(async (reset = false) => {
     try {
@@ -150,7 +161,6 @@ export default function SearchScreen({ navigation }: any) {
     } finally { setLoading(false); setRefreshing(false); }
   }, [applyFilters]);
 
-  // Background score refresh — recalculates via edge function in batches of 3
   const refreshScores = useCallback(async () => {
     const companies = allCompaniesRef.current;
     if (!companies.length) return;
@@ -165,9 +175,7 @@ export default function SearchScreen({ navigation }: any) {
       await fetchRanked(false);
     } catch (e) {
       console.warn('[SearchScreen] refreshScores error:', e);
-    } finally {
-      setScoring(false);
-    }
+    } finally { setScoring(false); }
   }, [fetchRanked]);
 
   const fetchSearch = useCallback(async (q: string) => {
@@ -180,20 +188,14 @@ export default function SearchScreen({ navigation }: any) {
     finally { setSearchLoading(false); }
   }, []);
 
-  // Re-apply filters whenever sort/filter state changes without refetching
   useEffect(() => { setRanked(applyFilters(allCompaniesRef.current)); }, [applyFilters]);
-
-  // Initial load
   useEffect(() => { fetchRanked(true); }, []);
-
-  // Auto-refresh scores every 10 minutes
   useEffect(() => {
     const t = setTimeout(refreshScores, 4000);
     const p = setInterval(refreshScores, SCORE_POLL_MS);
     return () => { clearTimeout(t); clearInterval(p); };
   }, [refreshScores]);
 
-  // Reload when tab comes into focus
   useFocusEffect(useCallback(() => { fetchRanked(false); }, [fetchRanked]));
 
   useEffect(() => {
@@ -217,55 +219,46 @@ export default function SearchScreen({ navigation }: any) {
     const confirmed =
       typeof window !== 'undefined' && typeof window.confirm === 'function'
         ? window.confirm(`Add all ${allCompanies.length} companies to your watchlist?`)
-        : await new Promise<boolean>((resolve) =>
-            Alert.alert(
-              'Add All to Watchlist',
-              `Add ${allCompanies.length} companies to your watchlist?`,
-              [
-                { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
-                { text: 'Add All', onPress: () => resolve(true) },
-              ]
-            )
-          );
+        : true;
     if (!confirmed) return;
-    try {
-      setBulkAdding(true);
-      setBulkResult(null);
-      let added = 0; let failed = 0;
-      await Promise.all(
-        allCompanies.map(async (company) => {
-          try {
-            await addToWatchlist(company.cvr_number);
-            added++;
-          } catch { failed++; }
-        })
-      );
-      setBulkResult({ added, failed });
-      setTimeout(() => setBulkResult(null), 4000);
-    } catch (err: any) {
-      Alert.alert('Error', err?.message || 'Bulk add failed');
-    } finally { setBulkAdding(false); }
-  }, [ranked]);
+    setBulkAdding(true);
+    setBulkResult(null);
+    let added = 0; let failed = 0;
+    for (const company of allCompanies) {
+      try { await addToWatchlist(company.cvr_number); added++; }
+      catch { failed++; }
+    }
+    setBulkResult({ added, failed });
+    setBulkAdding(false);
+  }, [allCompanies]);
 
-  const renderRanked = useCallback(({ item, index }: ListRenderItemInfo<RankedCompany>) => (
+  const renderItem = useCallback(({ item, index }: ListRenderItemInfo<RankedCompany>) => (
     <SignalCard item={item} rank={index + 1} onPress={() => navigateToDetail(item)} />
   ), [navigateToDetail]);
 
-  const renderSearch = useCallback(({ item }: ListRenderItemInfo<CompanySearchResult>) => (
-    <Pressable style={({ pressed }) => [styles.searchCard, pressed && styles.cardPressed]} onPress={() => navigateToDetail(item)}>
+  const renderSearchItem = useCallback(({ item }: ListRenderItemInfo<CompanySearchResult>) => (
+    <Pressable style={styles.searchCard} onPress={() => navigateToDetail(item)}>
       <View style={styles.searchCardInfo}>
-        <Text style={styles.searchCardName} numberOfLines={1}>{item.name}</Text>
-        <Text style={styles.searchCardMeta}>CVR {item.cvr_number}{item.industry ? `  ·  ${item.industry}` : ''}</Text>
+        <Text style={styles.searchCardName}>{item.name}</Text>
+        <Text style={styles.searchCardMeta}>
+          CVR {item.cvr_number}{item.industry ? `  ·  ${item.industry}` : ''}
+        </Text>
       </View>
       <Text style={styles.searchArrow}>›</Text>
     </Pressable>
   ), [navigateToDetail]);
 
+  const resetAllFilters = useCallback(() => {
+    setFilterLevel('all');
+    setEmployeeRange('all');
+    setScoreFilter('all');
+    setIndustryFilter('all');
+  }, []);
+
   const ListHeader = useCallback(() => (
     <View>
       {!isSearchMode && (
         <>
-          {/* Scoring indicator */}
           {scoring && (
             <View style={styles.scoringBar}>
               <ActivityIndicator size="small" color={B.blue} />
@@ -273,7 +266,7 @@ export default function SearchScreen({ navigation }: any) {
             </View>
           )}
 
-          {/* Row 1: Sort + Advanced toggle */}
+          {/* Sort + filter toggle */}
           <View style={styles.filterBar}>
             <View style={styles.chipsRow}>
               {SORT_CHIPS.map((chip) => (
@@ -289,7 +282,7 @@ export default function SearchScreen({ navigation }: any) {
             >
               <Text style={[styles.advancedToggleText, showAdvanced && styles.advancedToggleTextActive]}>
                 {showAdvanced ? '✕ Filters' : '⚙ Filters'}
-                {(filterLevel !== 'all' || employeeRange !== 'all' || scoreFilter !== 'all') ? ' •' : ''}
+                {hasActiveFilters ? ' •' : ''}
               </Text>
             </Pressable>
           </View>
@@ -297,6 +290,7 @@ export default function SearchScreen({ navigation }: any) {
           {/* Advanced filters panel */}
           {showAdvanced && (
             <View style={styles.advancedPanel}>
+
               <Text style={styles.filterGroupLabel}>Risk Level</Text>
               <View style={styles.chipsRow}>
                 {FILTER_CHIPS.map((chip) => (
@@ -328,11 +322,26 @@ export default function SearchScreen({ navigation }: any) {
                 ))}
               </View>
 
-              {/* Active filter summary + reset */}
-              {(filterLevel !== 'all' || employeeRange !== 'all' || scoreFilter !== 'all') && (
-                <Pressable style={styles.resetBtn} onPress={() => {
-                  setFilterLevel('all'); setEmployeeRange('all'); setScoreFilter('all');
-                }}>
+              {/* Industry filter */}
+              <Text style={styles.filterGroupLabel}>Industry</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <View style={[styles.chipsRow, { flexWrap: 'nowrap' }]}>
+                  {availableIndustries.map((ind) => (
+                    <Pressable
+                      key={ind}
+                      onPress={() => setIndustryFilter(ind)}
+                      style={[styles.chip, industryFilter === ind && styles.chipActive]}
+                    >
+                      <Text style={[styles.chipText, industryFilter === ind && styles.chipTextActive]}>
+                        {ind === 'all' ? 'All Industries' : ind}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </ScrollView>
+
+              {hasActiveFilters && (
+                <Pressable style={styles.resetBtn} onPress={resetAllFilters}>
                   <Text style={styles.resetBtnText}>✕ Reset all filters</Text>
                 </Pressable>
               )}
@@ -369,7 +378,6 @@ export default function SearchScreen({ navigation }: any) {
             </View>
           )}
 
-          {/* Bulk add bar */}
           {!loading && allCompanies.length > 0 && (
             <View style={styles.bulkBar}>
               {bulkResult ? (
@@ -397,9 +405,10 @@ export default function SearchScreen({ navigation }: any) {
           )}
         </>
       )}
-
     </View>
-  ), [isSearchMode, sortBy, filterLevel, employeeRange, scoreFilter, showAdvanced, loading, scoring, ranked, allCompanies, navigateToDetail, handleBulkAdd, bulkAdding, bulkResult]);
+  ), [isSearchMode, sortBy, filterLevel, employeeRange, scoreFilter, industryFilter, showAdvanced,
+      loading, scoring, ranked, allCompanies, navigateToDetail, handleBulkAdd, bulkAdding,
+      bulkResult, hasActiveFilters, availableIndustries, resetAllFilters]);
 
   if (loading && ranked.length === 0) {
     return (
@@ -425,7 +434,6 @@ export default function SearchScreen({ navigation }: any) {
 
   return (
     <View style={styles.container}>
-      {/* Page header — static, never re-renders */}
       <View style={styles.pageHeader}>
         <View style={styles.headerLeft}>
           <View style={styles.logoPill}>
@@ -436,7 +444,6 @@ export default function SearchScreen({ navigation }: any) {
         </View>
       </View>
 
-      {/* Search bar — outside FlatList so it never loses focus */}
       <View style={styles.searchWrap}>
         <Text style={styles.searchIcon}>🔍</Text>
         <TextInput
@@ -458,33 +465,44 @@ export default function SearchScreen({ navigation }: any) {
       )}
 
       {isSearchMode ? (
-        <FlatList data={searchResults} keyExtractor={(i) => i.id} renderItem={renderSearch}
-          ListHeaderComponent={ListHeader} keyboardShouldPersistTaps="handled" ListEmptyComponent={
-            loading ? null : (
-            <View style={styles.emptyWrap}>
-              <View style={styles.emptyIllustration}>
-                <Text style={styles.emptyIllustrationIcon}>🔍</Text>
+        <FlatList
+          data={searchResults}
+          keyExtractor={(item) => item.cvr_number}
+          renderItem={renderSearchItem}
+          ListEmptyComponent={
+            searchLoading ? null : (
+              <View style={styles.emptyWrap}>
+                <Text style={styles.emptyIcon}>🔍</Text>
+                <Text style={styles.emptyTitle}>No results</Text>
+                <Text style={styles.emptyText}>Try a different company name or CVR number.</Text>
               </View>
-              <Text style={styles.emptyTitle}>No Results Found</Text>
-              <Text style={styles.emptyText}>Try searching by company name or enter a CVR number directly (e.g. 39823977)</Text>
-            </View>
-          )
+            )
           }
-          contentContainerStyle={styles.listContent} showsVerticalScrollIndicator={false} />
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+        />
       ) : (
-        <FlatList data={ranked} keyExtractor={(i) => i.id} renderItem={renderRanked}
-          ListHeaderComponent={ListHeader} keyboardShouldPersistTaps="handled"
-          ListEmptyComponent={loading ? null : (
-            <View style={styles.emptyWrap}>
-              <View style={styles.emptyIllustration}>
-                <Text style={styles.emptyIllustrationIcon}>📊</Text>
+        <FlatList
+          data={ranked}
+          keyExtractor={(item) => item.id}
+          renderItem={renderItem}
+          ListHeaderComponent={ListHeader}
+          ListEmptyComponent={
+            loading ? null : (
+              <View style={styles.emptyWrap}>
+                <View style={styles.emptyIllustration}>
+                  <Text style={styles.emptyIllustrationIcon}>📊</Text>
+                </View>
+                <Text style={styles.emptyTitle}>No Signal Data Yet</Text>
+                <Text style={styles.emptyText}>Search for a company and add it to your watchlist. Signal scores are calculated automatically.</Text>
               </View>
-              <Text style={styles.emptyTitle}>No Signal Data Yet</Text>
-              <Text style={styles.emptyText}>Search for a company and add it to your watchlist. Signal scores are calculated automatically.</Text>
-            </View>
-          )}
-          contentContainerStyle={styles.listContent} showsVerticalScrollIndicator={false}
-          removeClippedSubviews maxToRenderPerBatch={12} windowSize={10}
+            )
+          }
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+          removeClippedSubviews
+          maxToRenderPerBatch={12}
+          windowSize={10}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={B.blue} colors={[B.blue]} />}
         />
       )}
@@ -505,7 +523,6 @@ const styles = StyleSheet.create({
   },
   scoringText: { color: B.blue, fontSize: 12, fontWeight: '600' },
 
-  // Page header
   pageHeader: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: B.pad, paddingTop: 18, paddingBottom: 14,
@@ -517,51 +534,48 @@ const styles = StyleSheet.create({
   logoPill: { backgroundColor: '#FFFFFF', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 },
   logo: { height: 22, width: 100 },
 
-  // Search
   searchWrap: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: B.bgInput, borderRadius: B.radius,
     borderWidth: 1, borderColor: B.border,
     margin: B.pad, marginBottom: 8, paddingHorizontal: 12, height: 44,
   },
-  searchIcon: { fontSize: 15, marginRight: 8 },
-  searchInput: { flex: 1, color: B.textPrimary, fontSize: 14, height: 44 },
+  searchIcon: { fontSize: 14, marginRight: 8 },
+  searchInput: { flex: 1, color: B.textPrimary, fontSize: 14 },
+  searchModeLabel: { color: B.textMuted, fontSize: 12, fontWeight: '600', paddingHorizontal: B.pad, marginBottom: 8 },
 
-  // Chips
-  chipsRow: { flexDirection: 'row', paddingHorizontal: B.pad, gap: 6, marginBottom: 6, flexWrap: 'wrap' },
+  filterBar: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: B.pad, paddingVertical: 8, gap: 8,
+  },
+  chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   chip: {
-    paddingHorizontal: 12, paddingVertical: 6, borderRadius: B.radiusFull,
-    backgroundColor: B.bgCardAlt, borderWidth: 1, borderColor: B.border,
+    paddingHorizontal: 10, paddingVertical: 5, borderRadius: B.radiusFull,
+    borderWidth: 1, borderColor: B.border, backgroundColor: B.bgCard,
   },
-  chipActive: { backgroundColor: B.blueMuted, borderColor: B.blue },
-  chipText: { color: B.textSecondary, fontSize: 12, fontWeight: '600' },
-  chipTextActive: { color: B.blue },
+  chipActive: { backgroundColor: B.blue, borderColor: B.blue },
+  chipText: { fontSize: 11, fontWeight: '600', color: B.textSecondary },
+  chipTextActive: { color: '#fff' },
 
-  filterBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: B.pad, marginBottom: 6, gap: 8 },
   advancedToggle: {
-    paddingHorizontal: 10, paddingVertical: 6, borderRadius: B.radiusFull,
-    backgroundColor: B.bgCardAlt, borderWidth: 1, borderColor: B.border, flexShrink: 0,
+    paddingHorizontal: 10, paddingVertical: 5, borderRadius: B.radiusFull,
+    borderWidth: 1, borderColor: B.border, backgroundColor: B.bgCard,
   },
-  advancedToggleActive: { backgroundColor: B.blueMuted, borderColor: B.blue },
-  advancedToggleText: { color: B.textSecondary, fontSize: 12, fontWeight: '600' },
-  advancedToggleTextActive: { color: B.blue },
+  advancedToggleActive: { backgroundColor: B.bgCardAlt, borderColor: B.borderStrong },
+  advancedToggleText: { fontSize: 11, fontWeight: '700', color: B.textSecondary },
+  advancedToggleTextActive: { color: B.textPrimary },
 
   advancedPanel: {
-    marginHorizontal: B.pad, marginBottom: 8,
+    marginHorizontal: B.pad, marginBottom: 8, padding: 14,
     backgroundColor: B.bgCard, borderRadius: B.radius,
-    borderWidth: 1, borderColor: B.border, padding: 14,
-    shadowColor: B.blue, shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2,
+    borderWidth: 1, borderColor: B.border, gap: 10,
   },
-  filterGroupLabel: { color: B.textSecondary, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8, marginTop: 4 },
-  filterGroupHint: { color: B.textMuted, fontWeight: '400', textTransform: 'none', letterSpacing: 0 },
-  filterGroupNote: { color: B.blue, fontSize: 11, fontWeight: '600', marginBottom: 10, marginTop: -4 },
-  resetBtn: {
-    marginTop: 10, paddingVertical: 8, alignItems: 'center',
-    borderTopWidth: 1, borderTopColor: B.border,
-  },
-  resetBtnText: { color: B.riskCritical, fontSize: 12, fontWeight: '700' },
+  filterGroupLabel: { fontSize: 10, fontWeight: '800', color: B.textMuted, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 2 },
+  filterGroupHint: { fontSize: 9, fontWeight: '500', color: B.textMuted, textTransform: 'none', letterSpacing: 0 },
+  filterGroupNote: { fontSize: 10, color: B.textMuted, marginTop: -4 },
+  resetBtn: { alignSelf: 'flex-start', marginTop: 4, paddingHorizontal: 10, paddingVertical: 5, borderRadius: B.radiusFull, backgroundColor: '#FEE2E2', borderWidth: 1, borderColor: '#FECACA' },
+  resetBtnText: { fontSize: 11, fontWeight: '700', color: B.riskCritical },
 
-  // Spotlight
   spotlightWrap: { paddingHorizontal: B.pad, marginBottom: 6, marginTop: 2 },
   spotlightTitle: { color: B.textSecondary, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 6 },
   spotlightRow: { flexDirection: 'row', gap: 6 },
@@ -574,7 +588,6 @@ const styles = StyleSheet.create({
   spotlightName: { color: B.textSecondary, fontSize: 10, fontWeight: '600', textAlign: 'center', lineHeight: 13 },
   spotlightScore: { fontSize: 16, fontWeight: '900' },
 
-  // Feed label
   feedLabelRow: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     paddingHorizontal: B.pad, marginBottom: 6,
@@ -582,13 +595,11 @@ const styles = StyleSheet.create({
   feedLabel: { color: B.textSecondary, fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8 },
   feedCount: { color: B.textMuted, fontSize: 12 },
 
-  // Signal card
   card: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: B.bgCard, marginHorizontal: B.pad, marginBottom: 1,
     borderRadius: B.radiusSm, paddingVertical: 5, paddingHorizontal: 8,
-    borderWidth: 1, borderColor: B.border,
-    elevation: 0,
+    borderWidth: 1, borderColor: B.border, elevation: 0,
   },
   cardPressed: { opacity: 0.75, backgroundColor: B.bgCardAlt },
   cardRank: { width: 26, alignItems: 'center' },
@@ -608,7 +619,6 @@ const styles = StyleSheet.create({
   scoreValue: { fontSize: 15, fontWeight: '900', lineHeight: 18 },
   scoreLabel: { color: B.textMuted, fontSize: 7, fontWeight: '700', letterSpacing: 1, marginTop: 1 },
 
-  // Search result
   searchCard: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: B.bgCard, marginHorizontal: B.pad, marginBottom: 6,
@@ -618,9 +628,7 @@ const styles = StyleSheet.create({
   searchCardName: { color: B.textPrimary, fontSize: 15, fontWeight: '700', marginBottom: 3 },
   searchCardMeta: { color: B.textMuted, fontSize: 12 },
   searchArrow: { color: B.textMuted, fontSize: 22, marginLeft: 10 },
-  searchModeLabel: { color: B.textMuted, fontSize: 12, fontWeight: '600', paddingHorizontal: B.pad, marginBottom: 8 },
 
-  // Footer + empty
   footerLoader: { paddingVertical: 20, alignItems: 'center' },
   emptyWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 60, paddingHorizontal: 32 },
   emptyIcon: { fontSize: 44, marginBottom: 12 },
@@ -630,8 +638,7 @@ const styles = StyleSheet.create({
   bulkBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     borderWidth: 1.5, borderColor: B.blue, borderRadius: B.radiusFull,
-    paddingVertical: 9, paddingHorizontal: 16, gap: 6,
-    backgroundColor: B.blueMuted,
+    paddingVertical: 9, paddingHorizontal: 16, gap: 6, backgroundColor: B.blueMuted,
   },
   bulkBtnActive: { opacity: 0.7 },
   bulkBtnText: { color: B.blue, fontSize: 13, fontWeight: '700' },
