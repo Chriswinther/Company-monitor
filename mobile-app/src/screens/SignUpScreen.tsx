@@ -28,13 +28,14 @@ export default function SignUpScreen({ navigation }: any) {
     setLoading(true);
     try {
       const { data, error } = await supabase.auth.signUp({ email: cleanEmail, password });
-      if (error) { setMessage(error.message); setMessageType('error'); return; }
-      setMessage('Account created! Check your inbox if email confirmation is enabled.');
-      setMessageType('success');
-      setTimeout(() => navigation.goBack(), 1500);
-    } catch (error: any) {
-      setMessage(error?.message || 'Something went wrong'); setMessageType('error');
-    } finally { setLoading(false); }
+if (error) { 
+  const msg = error.message.includes('restricted') || error.message.includes('Boyden')
+    ? 'Access is restricted to Boyden email addresses only.'
+    : error.message;
+  setMessage(msg); 
+  setMessageType('error'); 
+  return; 
+}
   };
 
   return (
