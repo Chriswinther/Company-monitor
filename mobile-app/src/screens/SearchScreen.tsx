@@ -106,6 +106,7 @@ export default function SearchScreen({ navigation }: any) {
   const [employeeRange, setEmployeeRange] = useState<EmployeeRange>('all');
   const [scoreFilter, setScoreFilter] = useState<ScoreFilter>('all');
   const [industryFilter, setIndustryFilter] = useState<string>('all');
+  const [showIndustryPicker, setShowIndustryPicker] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [bulkAdding, setBulkAdding] = useState(false);
   const [bulkResult, setBulkResult] = useState<{ added: number; failed: number } | null>(null);
@@ -322,23 +323,33 @@ export default function SearchScreen({ navigation }: any) {
                 ))}
               </View>
 
-              {/* Industry filter */}
+              {/* Industry filter — dropdown */}
               <Text style={styles.filterGroupLabel}>Industry</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                <View style={[styles.chipsRow, { flexWrap: 'nowrap' }]}>
+              <Pressable
+                style={[styles.industryDropdown, industryFilter !== 'all' && styles.industryDropdownActive]}
+                onPress={() => setShowIndustryPicker(!showIndustryPicker)}
+              >
+                <Text style={[styles.industryDropdownText, industryFilter !== 'all' && styles.industryDropdownTextActive]} numberOfLines={1}>
+                  {industryFilter === 'all' ? 'All Industries' : industryFilter}
+                </Text>
+                <Text style={styles.industryDropdownArrow}>{showIndustryPicker ? '▲' : '▼'}</Text>
+              </Pressable>
+              {showIndustryPicker && (
+                <View style={styles.industryPickerList}>
                   {availableIndustries.map((ind) => (
                     <Pressable
                       key={ind}
-                      onPress={() => setIndustryFilter(ind)}
-                      style={[styles.chip, industryFilter === ind && styles.chipActive]}
+                      onPress={() => { setIndustryFilter(ind); setShowIndustryPicker(false); }}
+                      style={[styles.industryPickerItem, industryFilter === ind && styles.industryPickerItemActive]}
                     >
-                      <Text style={[styles.chipText, industryFilter === ind && styles.chipTextActive]}>
+                      <Text style={[styles.industryPickerItemText, industryFilter === ind && styles.industryPickerItemTextActive]} numberOfLines={2}>
                         {ind === 'all' ? 'All Industries' : ind}
                       </Text>
+                      {industryFilter === ind && <Text style={styles.industryPickerCheck}>✓</Text>}
                     </Pressable>
                   ))}
                 </View>
-              </ScrollView>
+              )}
 
               {hasActiveFilters && (
                 <Pressable style={styles.resetBtn} onPress={resetAllFilters}>
@@ -407,8 +418,8 @@ export default function SearchScreen({ navigation }: any) {
       )}
     </View>
   ), [isSearchMode, sortBy, filterLevel, employeeRange, scoreFilter, industryFilter, showAdvanced,
-      loading, scoring, ranked, allCompanies, navigateToDetail, handleBulkAdd, bulkAdding,
-      bulkResult, hasActiveFilters, availableIndustries, resetAllFilters]);
+      showIndustryPicker, loading, scoring, ranked, allCompanies, navigateToDetail, handleBulkAdd,
+      bulkAdding, bulkResult, hasActiveFilters, availableIndustries, resetAllFilters]);
 
   if (loading && ranked.length === 0) {
     return (
@@ -656,4 +667,30 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center', marginBottom: 16,
   },
   emptyIllustrationIcon: { fontSize: 28 },
+
+  // Industry dropdown
+  industryDropdown: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: B.bgCard, borderRadius: B.radiusSm,
+    borderWidth: 1, borderColor: B.border,
+    paddingHorizontal: 12, paddingVertical: 9,
+  },
+  industryDropdownActive: { borderColor: B.blue, backgroundColor: B.blueMuted },
+  industryDropdownText: { flex: 1, fontSize: 13, color: B.textSecondary, fontWeight: '600' },
+  industryDropdownTextActive: { color: B.blue },
+  industryDropdownArrow: { fontSize: 10, color: B.textMuted, marginLeft: 8 },
+  industryPickerList: {
+    borderWidth: 1, borderColor: B.border, borderRadius: B.radiusSm,
+    backgroundColor: B.bgCard, marginTop: 4, maxHeight: 220,
+    overflow: 'hidden',
+  },
+  industryPickerItem: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 12, paddingVertical: 10,
+    borderBottomWidth: 1, borderBottomColor: B.border,
+  },
+  industryPickerItemActive: { backgroundColor: B.blueMuted },
+  industryPickerItemText: { flex: 1, fontSize: 13, color: B.textSecondary },
+  industryPickerItemTextActive: { color: B.blue, fontWeight: '700' },
+  industryPickerCheck: { color: B.blue, fontSize: 13, fontWeight: '700', marginLeft: 8 },
 });
