@@ -16,10 +16,15 @@ export default function SignUpScreen({ navigation }: any) {
 
   const handleSignUp = async () => {
     const cleanEmail = email.trim();
-    setMessage(''); setMessageType('');
+    setMessage(''); setMessageType(''); 
     if (!cleanEmail || !password || !confirmPassword) { setMessage('Please fill in all fields'); setMessageType('error'); return; }
     if (password !== confirmPassword) { setMessage('Passwords do not match'); setMessageType('error'); return; }
     if (password.length < 6) { setMessage('Password must be at least 6 characters'); setMessageType('error'); return; }
+    if (!cleanEmail.endsWith('@boyden.com')) {
+  setMessage('Access is restricted to Boyden email addresses only.');
+  setMessageType('error');
+  return;
+}
     setLoading(true);
     try {
       const { data, error } = await supabase.auth.signUp({ email: cleanEmail, password });

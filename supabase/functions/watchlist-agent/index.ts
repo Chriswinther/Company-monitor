@@ -5,7 +5,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 //
 // An autonomous agent that runs on a schedule and:
 //   1. Scans all watched companies and decides which need refreshing
-//   2. Fans out to company-news + company-signal-score in parallel for stale ones
+//   2. Fans out to company-news + company-job-signals + company-signal-score
+//      in parallel for stale companies
 //   3. Detects score velocity (fast-moving scores = urgent)
 //   4. Sends each affected user a Claude-written, prioritized alert
 //      instead of a dumb threshold notification
@@ -29,6 +30,7 @@ function jsonResponse(status: number, body: unknown) {
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 const STALE_NEWS_HOURS = 12;        // refresh news if older than this
+const STALE_JOB_HOURS = 12;         // refresh job signals if older than this
 const STALE_SCORE_HOURS = 6;        // refresh score if older than this
 const VELOCITY_THRESHOLD = 10;      // score moved by this much = urgent
 const ALERT_MIN_SCORE = 30;         // don't alert below this score
@@ -46,6 +48,7 @@ interface WatchedCompany {
   current_risk_level: string | null;
   score_updated_at: string | null;
   news_fetched_at: string | null;
+  job_signals_fetched_at: string | null;
   watchers: Array<{ user_id: string; email: string; full_name: string | null; expo_push_token: string | null }>;
 }
 
@@ -59,6 +62,7 @@ interface RefreshResult {
   risk_level: string | null;
   risk_factors: any[];
   news_refreshed: boolean;
+  jobs_refreshed: boolean;
   score_refreshed: boolean;
   error: string | null;
 }
@@ -96,13 +100,18 @@ async function callEdgeFunction(
 
 // ─── Step 1: Decide which companies need refreshing ───────────────────────────
 
-function needsRefresh(company: WatchedCompany): { news: boolean; score: boolean } {
+function needsRefresh(company: WatchedCompany): { news: boolean; jobs: boolean; score: boolean } {
   const now = Date.now();
   const staleNewsMs = STALE_NEWS_HOURS * 60 * 60 * 1000;
+  const staleJobsMs = STALE_JOB_HOURS * 60 * 60 * 1000;
   const staleScoreMs = STALE_SCORE_HOURS * 60 * 60 * 1000;
 
   const newsAge = company.news_fetched_at
     ? now - new Date(company.news_fetched_at).getTime()
+    : Infinity;
+
+  const jobsAge = company.job_signals_fetched_at
+    ? now - new Date(company.job_signals_fetched_at).getTime()
     : Infinity;
 
   const scoreAge = company.score_updated_at
@@ -111,6 +120,7 @@ function needsRefresh(company: WatchedCompany): { news: boolean; score: boolean 
 
   return {
     news: newsAge > staleNewsMs,
+    jobs: jobsAge > staleJobsMs,
     score: scoreAge > staleScoreMs,
   };
 }
@@ -122,7 +132,7 @@ async function refreshCompany(
   serviceKey: string,
   supabase: any,
   company: WatchedCompany,
-  refresh: { news: boolean; score: boolean },
+  refresh: { news: boolean; jobs: boolean; score: boolean },
 ): Promise<RefreshResult> {
   const result: RefreshResult = {
     company_id: company.company_id,
@@ -134,16 +144,17 @@ async function refreshCompany(
     risk_level: company.current_risk_level,
     risk_factors: [],
     news_refreshed: false,
+    jobs_refreshed: false,
     score_refreshed: false,
     error: null,
   };
 
   try {
-    // Refresh news and score in parallel
-    const tasks: Promise<any>[] = [];
+    // Refresh news and job signals in parallel first — score reads from these tables
+    const dataTasks: Promise<any>[] = [];
 
     if (refresh.news) {
-      tasks.push(
+      dataTasks.push(
         callEdgeFunction(supabaseUrl, serviceKey, "company-news", {
           company_id: company.company_id,
           force_refresh: true,
@@ -152,27 +163,37 @@ async function refreshCompany(
       );
     }
 
-    if (refresh.score) {
-      tasks.push(
-        callEdgeFunction(supabaseUrl, serviceKey, "company-signal-score", {
-          cvr: company.cvr_number,
-          force_recalculate: true,
-        }).then((data) => {
-          result.score_refreshed = true;
-          const newScore = data?.score ?? data?.risk_score ?? null;
-          if (newScore !== null) {
-            result.new_score = newScore;
-            result.score_delta = company.current_score !== null
-              ? Math.round(newScore - company.current_score)
-              : null;
-            result.risk_level = data?.risk_level ?? result.risk_level;
-            result.risk_factors = data?.risk_factors ?? [];
-          }
-        }).catch((e) => console.warn(`Score refresh failed for ${company.company_name}:`, e.message)),
+    if (refresh.jobs) {
+      dataTasks.push(
+        callEdgeFunction(supabaseUrl, serviceKey, "company-job-signals", {
+          company_id: company.company_id,
+          cvr_number: company.cvr_number,
+          company_name: company.company_name,
+        }).then(() => { result.jobs_refreshed = true; })
+         .catch((e) => console.warn(`Job signals refresh failed for ${company.company_name}:`, e.message)),
       );
     }
 
-    await Promise.all(tasks);
+    // Wait for news + jobs before recalculating score so it picks up fresh data
+    await Promise.all(dataTasks);
+
+    if (refresh.score) {
+      await callEdgeFunction(supabaseUrl, serviceKey, "company-signal-score", {
+        cvr: company.cvr_number,
+        force_recalculate: true,
+      }).then((data) => {
+        result.score_refreshed = true;
+        const newScore = data?.score ?? data?.risk_score ?? null;
+        if (newScore !== null) {
+          result.new_score = newScore;
+          result.score_delta = company.current_score !== null
+            ? Math.round(newScore - company.current_score)
+            : null;
+          result.risk_level = data?.risk_level ?? result.risk_level;
+          result.risk_factors = data?.risk_factors ?? [];
+        }
+      }).catch((e) => console.warn(`Score refresh failed for ${company.company_name}:`, e.message));
+    }
 
   } catch (err) {
     result.error = err instanceof Error ? err.message : String(err);
@@ -397,6 +418,7 @@ serve(async (req) => {
           current_risk_level: null,
           score_updated_at: null,
           news_fetched_at: null,
+          job_signals_fetched_at: null,
           watchers: [],
         });
       }
@@ -409,16 +431,21 @@ serve(async (req) => {
       });
     }
 
-    // Enrich with current scores + news timestamps
+    // Enrich with current scores + news + job signal timestamps
     const companyIds = [...companyMap.keys()];
 
-    const [scoresRes, newsRes] = await Promise.all([
+    const [scoresRes, newsRes, jobsRes] = await Promise.all([
       supabase
         .from("company_risk_scores")
         .select("company_id, risk_score, risk_level, updated_at")
         .in("company_id", companyIds),
       supabase
         .from("company_news")
+        .select("company_id, fetched_at")
+        .in("company_id", companyIds)
+        .order("fetched_at", { ascending: false }),
+      supabase
+        .from("job_signals")
         .select("company_id, fetched_at")
         .in("company_id", companyIds)
         .order("fetched_at", { ascending: false }),
@@ -443,6 +470,16 @@ serve(async (req) => {
       }
     }
 
+    // Take latest job signal timestamp per company
+    const seenJobs = new Set<string>();
+    for (const job of jobsRes.data ?? []) {
+      if (!seenJobs.has(job.company_id)) {
+        seenJobs.add(job.company_id);
+        const c = companyMap.get(job.company_id);
+        if (c) c.job_signals_fetched_at = job.fetched_at;
+      }
+    }
+
     const companies = [...companyMap.values()];
     console.log(`[watchlist-agent] ${companies.length} unique companies to evaluate`);
 
@@ -450,7 +487,7 @@ serve(async (req) => {
 
     const toRefresh = companies
       .map((c) => ({ company: c, refresh: needsRefresh(c) }))
-      .filter(({ refresh }) => refresh.news || refresh.score);
+      .filter(({ refresh }) => refresh.news || refresh.jobs || refresh.score);
 
     console.log(`[watchlist-agent] ${toRefresh.length} companies need refreshing`);
 
@@ -462,6 +499,7 @@ serve(async (req) => {
           name: company.company_name,
           cvr: company.cvr_number,
           refresh_news: refresh.news,
+          refresh_jobs: refresh.jobs,
           refresh_score: refresh.score,
           current_score: company.current_score,
         })),
@@ -530,6 +568,11 @@ serve(async (req) => {
       duration_ms: durationMs,
       dry_run: dryRun,
     });
+
+    // ── 6. Trigger accuracy tracker (snapshot + outcome detection) ───────────
+    // Fire and forget — don't block the agent response
+    callEdgeFunction(supabaseUrl, serviceKey, "accuracy-tracker", {})
+      .catch((e) => console.warn("[watchlist-agent] accuracy-tracker call failed:", e.message));
 
     console.log(`[watchlist-agent] Done in ${durationMs}ms. Refreshed=${results.length} Alerts=${alertsSent} Errors=${errors}`);
 
